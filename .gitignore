@@ -9,3 +9,4 @@
 
 # Catatan kerja agen (memori proyek), bukan bagian dari paket.
 /.workbuddy-ai/
+.packagist-token

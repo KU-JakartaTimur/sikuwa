@@ -3,6 +3,11 @@
 SDK PHP untuk beberapa gateway WhatsApp unofficial. Tujuannya satu antarmuka yang sama untuk banyak gateway,
 sehingga penggantian provider atau otomatis pilih provider tidak mengubah kode pemanggil.
 
+[![Rilis stabil](https://img.shields.io/packagist/v/mdestafadilah/sikuwa.svg?style=flat-square)](https://packagist.org/packages/mdestafadilah/sikuwa)
+[![Total unduhan](https://img.shields.io/packagist/dt/mdestafadilah/sikuwa.svg?style=flat-square)](https://packagist.org/packages/mdestafadilah/sikuwa)
+[![PHP](https://img.shields.io/packagist/php-v/mdestafadilah/sikuwa.svg?style=flat-square)](https://packagist.org/packages/mdestafadilah/sikuwa)
+[![Lisensi](https://img.shields.io/packagist/l/mdestafadilah/sikuwa.svg?style=flat-square)](LICENSE)
+
 Namespace `Sikuwa\Whatsapp\`, PSR-4, dibangun di atas [Guzzle](https://docs.guzzlephp.org/) 7,
 membutuhkan PHP 8.1+.
 
@@ -18,7 +23,19 @@ membutuhkan PHP 8.1+.
 
 ## Instalasi
 
-Belum dipublikasikan ke Packagist, jadi daftarkan repositori GitHub-nya lebih dulu:
+```bash
+composer require mdestafadilah/sikuwa
+```
+
+Butuh PHP 8.1+ dan `ext-mbstring`; Guzzle 7 ikut terpasang sebagai dependensi.
+
+Untuk mengikuti `main` alih-alih rilis stabil:
+
+```bash
+composer require mdestafadilah/sikuwa:dev-main
+```
+
+Kalau butuh fork sendiri atau commit tertentu, daftarkan repositori GitHub-nya:
 
 ```json
 {
