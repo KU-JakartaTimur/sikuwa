@@ -17,7 +17,8 @@ use Sikuwa\Whatsapp\Providers\AbstractProvider;
  * Konfigurasi:
  *   WHATSAPP_PROVIDER = OpenWA
  *   WHATSAPP_TOKEN    = API key OpenWA, dikirim sebagai header `X-API-Key`
- *   WHATSAPP_URL      = base URL instance, mis. https://v15.example.com
+ *   WHATSAPP_URL_OpenWA = base URL instance, mis. https://v15.example.com
+ *                         (`WHATSAPP_URL` juga dibaca sebagai fallback umum)
  *   WHATSAPP_SESSION  = id session yang sudah di-start dan tersambung
  */
 final class OpenWA extends AbstractProvider
@@ -34,14 +35,15 @@ final class OpenWA extends AbstractProvider
     /**
      * @param array{
      *     token?:string, url?:string, session?:string, timeout?:int|float,
-     *     tokens?:array<string,string>, headers?:array<string,string>
+     *     tokens?:array<string,string>, headers?:array<string,string>,
+     *     urls?:array<string,string>
      * }|Config|null $options
      */
     public function __construct(array|Config|null $options = null, ?HttpExecutor $http = null)
     {
         parent::__construct($options, $http);
 
-        $this->baseUrl = $this->config->url(self::DEFAULT_URL);
+        $this->baseUrl = $this->config->url(self::DEFAULT_URL, self::NAME);
         $this->sessionId = $this->config->session();
     }
 

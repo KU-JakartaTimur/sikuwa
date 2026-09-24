@@ -15,12 +15,17 @@ use Sikuwa\Whatsapp\Providers\AbstractProvider;
  * Konfigurasi:
  *   WHATSAPP_PROVIDER = Fonnte
  *   WHATSAPP_TOKEN    = token perangkat Fonnte, dikirim sebagai header `Authorization`
+ *   WHATSAPP_URL_Fonnte = opsional; hanya kalau perlu lewat proxy/endpoint lain
  *
  * Berbeda dari gateway self-hosted lain di SDK ini, Fonnte adalah layanan
- * pihak ketiga dengan satu endpoint tetap. Karena itu `WHATSAPP_URL` **tidak**
- * dibaca di sini — kalau dibaca, satu nilai `WHATSAPP_URL` yang dipakai
- * gateway lain akan mengalihkan pengiriman Fonnte ke host yang salah.
- * Override URL hanya lewat opsi `url` yang eksplisit.
+ * pihak ketiga dengan satu endpoint tetap. Karena itu `WHATSAPP_URL` — kunci
+ * bersama yang biasanya ditujukan untuk gateway self-hosted — **tidak** dibaca
+ * di sini: kalau dibaca, satu nilai `WHATSAPP_URL` akan mengalihkan pengiriman
+ * Fonnte ke host yang salah.
+ *
+ * Yang diterima hanya URL yang jelas milik Fonnte: opsi `url` yang eksplisit,
+ * atau `WHATSAPP_URL_Fonnte`. Keduanya tidak mungkin tertukar dengan gateway
+ * lain, jadi aman — dan berguna kalau pengiriman perlu lewat proxy.
  */
 final class Fonnte extends AbstractProvider
 {
@@ -33,14 +38,17 @@ final class Fonnte extends AbstractProvider
     /**
      * @param array{
      *     token?:string, url?:string, timeout?:int|float,
-     *     tokens?:array<string,string>, headers?:array<string,string>
+     *     tokens?:array<string,string>, headers?:array<string,string>,
+     *     urls?:array<string,string>
      * }|Config|null $options
      */
     public function __construct(array|Config|null $options = null, ?HttpExecutor $http = null)
     {
         parent::__construct($options, $http);
 
-        $this->urlApi = $this->config->explicitUrl() ?? self::DEFAULT_URL;
+        $this->urlApi = $this->config->explicitUrl()
+            ?? $this->config->providerUrl(self::NAME)
+            ?? self::DEFAULT_URL;
     }
 
     public function getProvider(): string

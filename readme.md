@@ -153,26 +153,43 @@ Lihat [`.env.example`](.env.example). Ringkasnya:
 | `WHATSAPP_PROVIDER` | `Auto` atau nama gateway |
 | `WHATSAPP_TOKEN_<Provider>` | Token per gateway. Inilah yang dihitung mode `Auto` |
 | `WHATSAPP_TOKEN` | Token umum, dipakai bila token khusus gateway tidak ada |
-| `WHATSAPP_URL` | Base URL gateway self-hosted. **Diabaikan Fonnte** |
+| `WHATSAPP_URL_<Provider>` | Base URL per gateway. **Ini yang sebaiknya dipakai** untuk self-hosted |
+| `WHATSAPP_URL` | Base URL cadangan bila kunci per-provider kosong. **Diabaikan Fonnte** |
 | `WHATSAPP_SESSION` | Khusus OpenWA |
 | `WHATSAPP_INSTANCE` | Khusus ApiMe dan Evolution API |
 | `WHATSAPP_TIMEOUT` | Batas waktu request, detik (1–60, default 10) |
 
-Nilai default URL bila `WHATSAPP_URL` dikosongkan: OpenWA
-`https://openwa.whatsapp.com`, ApiMe `https://api-me.whatsapp.com`,
-Evolution API `https://evolution-api.whatsapp.com`, Wuzapi
-`https://wuzapi.whatsapp.com`. Fonnte tidak memakainya sama sekali.
+### URL per gateway
 
-`WHATSAPP_URL` berlaku untuk provider **apa pun** yang sedang aktif, jadi jangan
-mengisinya dengan URL satu gateway lalu berpindah ke gateway lain — nilai itu
-akan ikut terbawa.
+Satu `WHATSAPP_URL` bersama tidak cukup kalau Anda memakai lebih dari satu
+gateway self-hosted: nilainya berlaku untuk provider **apa pun** yang sedang
+aktif, jadi URL OpenWA akan ikut terpakai Wuzapi. Pakai kunci per-provider:
+
+```dotenv
+WHATSAPP_URL_OpenWA=https://wa-1.internal
+WHATSAPP_URL_Wuzapi=https://wa-2.internal
+```
+
+Setara lewat opsi konstruktor:
+`['urls' => ['OpenWA' => 'https://wa-1.internal']]`.
+
+Urutan pembacaannya: kunci per-provider → `url` yang diberikan eksplisit →
+`WHATSAPP_URL` → default provider. Kunci per-provider sengaja **tidak** jatuh ke
+`WHATSAPP_URL`, sama seperti `WHATSAPP_TOKEN_<Provider>` yang tidak jatuh ke
+`WHATSAPP_TOKEN`.
+
+Nilai default bila semuanya dikosongkan: OpenWA `https://openwa.whatsapp.com`,
+ApiMe `https://api-me.whatsapp.com`, Evolution API
+`https://evolution-api.whatsapp.com`, Wuzapi `https://wuzapi.whatsapp.com`.
+Fonnte punya endpoint tetap sendiri.
 
 ### Catatan per gateway
 
 - **Fonnte** — selalu membalas HTTP 200; keberhasilan sebenarnya ada di field
   `status`. Endpoint-nya tetap, jadi `WHATSAPP_URL` sengaja **tidak** dibaca:
   kalau dibaca, satu nilai yang ditujukan untuk gateway self-hosted akan
-  mengalihkan pengiriman Fonnte ke host yang salah.
+  mengalihkan pengiriman Fonnte ke host yang salah. Yang diterima hanya URL
+  yang jelas milik Fonnte: opsi `url` eksplisit atau `WHATSAPP_URL_Fonnte`.
 - **OpenWA** — butuh `WHATSAPP_SESSION`. Satu pesan dikirim ke `send-text`
   (sinkron, balasannya `messageId`); lebih dari satu dikirim ke `send-bulk`
   (asinkron, balasannya `batchId`, maksimum 100 pesan per batch).

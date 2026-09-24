@@ -18,7 +18,8 @@ namespace Sikuwa\Whatsapp;
  *
  * Kunci yang dikenali: `WA_NOTIFICATION`, `WHATSAPP_PROVIDER`,
  * `WHATSAPP_TOKEN`, `WHATSAPP_TOKEN_<Provider>`, `WHATSAPP_URL`,
- * `WHATSAPP_SESSION`, `WHATSAPP_INSTANCE`, `WHATSAPP_TIMEOUT`.
+ * `WHATSAPP_URL_<Provider>`, `WHATSAPP_SESSION`, `WHATSAPP_INSTANCE`,
+ * `WHATSAPP_TIMEOUT`.
  */
 final class Config
 {
@@ -34,6 +35,8 @@ final class Config
      * @param array<string,string> $tokens Token per provider, mis. ['Fonnte' => 'xxx'].
      *                                     Menang atas `WHATSAPP_TOKEN_<Provider>`.
      * @param array<string,string> $headers Header tambahan untuk setiap request.
+     * @param array<string,string> $urls URL per provider, mis. ['OpenWA' => 'https://wa.internal'].
+     *                                   Menang atas `WHATSAPP_URL_<Provider>`.
      */
     public function __construct(
         private ?string $token = null,
@@ -43,7 +46,8 @@ final class Config
         private ?float $timeout = null,
         private array $tokens = [],
         private ?string $provider = null,
-        private array $headers = []
+        private array $headers = [],
+        private array $urls = []
     ) {
     }
 
@@ -53,7 +57,7 @@ final class Config
      * @param array{
      *     token?:string, url?:string, session?:string, instance?:string,
      *     timeout?:int|float, tokens?:array<string,string>, provider?:string,
-     *     headers?:array<string,string>
+     *     headers?:array<string,string>, urls?:array<string,string>
      * }|Config|null $options
      */
     public static function from(array|Config|null $options): self
@@ -75,6 +79,7 @@ final class Config
             tokens: $options['tokens'] ?? [],
             provider: $options['provider'] ?? null,
             headers: $options['headers'] ?? [],
+            urls: $options['urls'] ?? [],
         );
     }
 
@@ -137,6 +142,22 @@ final class Config
         return ($specific === null || $specific === '') ? null : $specific;
     }
 
+    /**
+     * URL khusus satu provider: `urls[<Provider>]`, lalu
+     * `WHATSAPP_URL_<Provider>`. Tidak pernah jatuh ke `WHATSAPP_URL`.
+     *
+     * Inilah yang membuat beberapa gateway self-hosted bisa dikonfigurasi
+     * bersamaan: `WHATSAPP_URL` hanya punya satu nilai, jadi mengisinya untuk
+     * OpenWA akan ikut terpakai Wuzapi. Kunci per-provider tidak punya
+     * ambiguitas itu.
+     */
+    public function providerUrl(string $provider): ?string
+    {
+        $specific = $this->urls[$provider] ?? self::env("WHATSAPP_URL_{$provider}");
+
+        return ($specific === null || $specific === '') ? null : $specific;
+    }
+
     /** Token efektif: token khusus provider, lalu token umum, lalu environment. */
     public function token(?string $provider = null): string
     {
@@ -155,10 +176,19 @@ final class Config
         return self::env('WHATSAPP_TOKEN') ?? '';
     }
 
-    /** URL dasar: nilai eksplisit, lalu `WHATSAPP_URL`, lalu default provider. */
-    public function url(string $default = ''): string
+    /**
+     * URL dasar. Urutannya: URL khusus provider, lalu nilai eksplisit, lalu
+     * `WHATSAPP_URL`, lalu default provider.
+     *
+     * Kunci per-provider didahulukan atas nilai eksplisit supaya
+     * `WHATSAPP_URL_<Provider>` menang atas `WHATSAPP_URL` — sama seperti
+     * {@see providerToken()} yang menang atas token umum.
+     */
+    public function url(string $default = '', ?string $provider = null): string
     {
-        $url = $this->url ?? self::env('WHATSAPP_URL');
+        $url = ($provider !== null ? $this->providerUrl($provider) : null)
+            ?? $this->url
+            ?? self::env('WHATSAPP_URL');
 
         return rtrim(($url === null || $url === '') ? $default : $url, '/');
     }

@@ -18,7 +18,8 @@ use Sikuwa\Whatsapp\Providers\AbstractProvider;
  *   WHATSAPP_PROVIDER = EvolutionAPI
  *   WHATSAPP_TOKEN    = API key global (AUTHENTICATION_API_KEY) atau token
  *                       instance; keduanya diterima lewat header `apikey`
- *   WHATSAPP_URL      = base URL instance, mis. https://v7.rspwa.example.com
+ *   WHATSAPP_URL_EvolutionAPI = base URL instance, mis. https://v7.rspwa.example.com
+ *                               (`WHATSAPP_URL` juga dibaca sebagai fallback umum)
  *   WHATSAPP_INSTANCE = nama instance yang sudah tersambung
  */
 final class EvolutionAPI extends AbstractProvider
@@ -33,14 +34,15 @@ final class EvolutionAPI extends AbstractProvider
     /**
      * @param array{
      *     token?:string, url?:string, instance?:string, timeout?:int|float,
-     *     tokens?:array<string,string>, headers?:array<string,string>
+     *     tokens?:array<string,string>, headers?:array<string,string>,
+     *     urls?:array<string,string>
      * }|Config|null $options
      */
     public function __construct(array|Config|null $options = null, ?HttpExecutor $http = null)
     {
         parent::__construct($options, $http);
 
-        $this->baseUrl = $this->config->url(self::DEFAULT_URL);
+        $this->baseUrl = $this->config->url(self::DEFAULT_URL, self::NAME);
         $this->instanceName = $this->config->instance();
     }
 

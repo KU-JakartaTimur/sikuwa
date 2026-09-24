@@ -17,7 +17,8 @@ use Sikuwa\Whatsapp\Providers\AbstractProvider;
  * Konfigurasi:
  *   WHATSAPP_PROVIDER = ApiMe
  *   WHATSAPP_TOKEN    = instance token (header `Authorization: Bearer ...`)
- *   WHATSAPP_URL      = base URL instance, mis. https://v14.example.com
+ *   WHATSAPP_URL_ApiMe = base URL instance, mis. https://v14.example.com
+ *                       (`WHATSAPP_URL` juga dibaca sebagai fallback umum)
  *   WHATSAPP_INSTANCE = UUID instance yang sudah tersambung
  *
  * Catatan: ApiMe menuntut token BER-SCOPE INSTANCE. Token user (JWT login)
@@ -37,14 +38,15 @@ final class ApiMe extends AbstractProvider
     /**
      * @param array{
      *     token?:string, url?:string, instance?:string, timeout?:int|float,
-     *     tokens?:array<string,string>, headers?:array<string,string>
+     *     tokens?:array<string,string>, headers?:array<string,string>,
+     *     urls?:array<string,string>
      * }|Config|null $options
      */
     public function __construct(array|Config|null $options = null, ?HttpExecutor $http = null)
     {
         parent::__construct($options, $http);
 
-        $url = $this->config->url(self::DEFAULT_URL);
+        $url = $this->config->url(self::DEFAULT_URL, self::NAME);
 
         // Terima "http://host:8080" maupun "http://host:8080/api" tanpa jadi "/api/api".
         $this->baseUrl = preg_replace('#/api$#', '', $url) ?? $url;

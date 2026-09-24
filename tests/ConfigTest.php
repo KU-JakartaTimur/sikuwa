@@ -163,6 +163,76 @@ final class ConfigTest extends TestCase
         self::assertSame($config, $config->withUrl(''));
     }
 
+    /**
+     * Inti dari fitur ini: dua gateway self-hosted bisa dikonfigurasi
+     * bersamaan. Dengan satu `WHATSAPP_URL` bersama, mengisi URL OpenWA akan
+     * ikut terpakai Wuzapi.
+     */
+    public function testProviderUrlBeatsSharedUrl(): void
+    {
+        self::fakeEnv([
+            'WHATSAPP_URL' => 'https://bersama.test',
+            'WHATSAPP_URL_OpenWA' => 'https://openwa.test',
+            'WHATSAPP_URL_Wuzapi' => 'https://wuzapi.test',
+        ]);
+
+        $config = Config::fromEnvironment();
+
+        self::assertSame('https://openwa.test', $config->url('', 'OpenWA'));
+        self::assertSame('https://wuzapi.test', $config->url('', 'Wuzapi'));
+
+        // Provider yang tidak punya kunci sendiri tetap memakai yang bersama.
+        self::assertSame('https://bersama.test', $config->url('', 'Fonnte'));
+    }
+
+    /** Sama seperti token: kunci per-provider tidak jatuh ke kunci umum. */
+    public function testProviderUrlDoesNotFallBackToSharedUrl(): void
+    {
+        self::fakeEnv(['WHATSAPP_URL' => 'https://bersama.test']);
+
+        self::assertNull(Config::fromEnvironment()->providerUrl('Wuzapi'));
+    }
+
+    public function testProviderUrlFallsBackToProviderDefault(): void
+    {
+        self::fakeEnv([]);
+
+        self::assertSame(
+            'https://default.test',
+            Config::fromEnvironment()->url('https://default.test', 'OpenWA')
+        );
+    }
+
+    public function testUrlsOptionBeatsProviderUrlEnvironment(): void
+    {
+        self::fakeEnv(['WHATSAPP_URL_OpenWA' => 'https://dari-env.test']);
+
+        $config = Config::from(['urls' => ['OpenWA' => 'https://dari-opsi.test']]);
+
+        self::assertSame('https://dari-opsi.test', $config->url('', 'OpenWA'));
+    }
+
+    /**
+     * Tanpa nama provider, kunci per-provider tidak boleh ikut terbaca —
+     * kalau ikut, `url()` polos jadi tidak bisa diprediksi.
+     */
+    public function testUrlWithoutProviderIgnoresProviderKeys(): void
+    {
+        self::fakeEnv([
+            'WHATSAPP_URL' => 'https://bersama.test',
+            'WHATSAPP_URL_OpenWA' => 'https://openwa.test',
+        ]);
+
+        self::assertSame('https://bersama.test', Config::fromEnvironment()->url());
+    }
+
+    public function testProviderUrlIsTrimmedOfTrailingSlash(): void
+    {
+        self::fakeEnv(['WHATSAPP_URL_OpenWA' => 'https://openwa.test/']);
+
+        self::assertSame('https://openwa.test', Config::fromEnvironment()->url('', 'OpenWA'));
+    }
+
     public function testFromAcceptsConfigInstance(): void
     {
         $config = Config::from(['token' => 'tok']);

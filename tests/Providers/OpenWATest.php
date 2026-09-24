@@ -211,4 +211,28 @@ final class OpenWATest extends TestCase
         self::assertStringContainsString('/messages/send-text', (string) $backend->lastRequest()?->getUri());
         self::assertStringContainsString('a%2Fb%20c', (string) $backend->lastRequest()?->getUri());
     }
+
+    /**
+     * `WHATSAPP_URL_OpenWA` harus menang atas `WHATSAPP_URL` bersama, supaya
+     * OpenWA dan Wuzapi bisa dikonfigurasi berdampingan.
+     */
+    public function testProviderUrlBeatsSharedUrlFromEnvironment(): void
+    {
+        Config::useResolver(static fn (string $key): ?string => [
+            'WHATSAPP_URL' => 'https://bersama.test',
+            'WHATSAPP_URL_OpenWA' => 'https://openwa.test',
+            'WHATSAPP_SESSION' => 'sess-env',
+            'WHATSAPP_TOKEN_OpenWA' => 'key-env',
+        ][$key] ?? null);
+
+        $backend = new MockBackend([MockBackend::json(['messageId' => 'x'])]);
+
+        new OpenWA(null, $backend->executor())
+            ->sendMessage(['destination' => '0811', 'message' => 'a']);
+
+        self::assertSame(
+            'https://openwa.test/api/sessions/sess-env/messages/send-text',
+            (string) $backend->lastRequest()?->getUri()
+        );
+    }
 }

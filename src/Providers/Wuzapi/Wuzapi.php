@@ -17,7 +17,8 @@ use Sikuwa\Whatsapp\Providers\AbstractProvider;
  * Konfigurasi:
  *   WHATSAPP_PROVIDER = Wuzapi
  *   WHATSAPP_TOKEN    = token milik user/sesi (header `Token`)
- *   WHATSAPP_URL      = base URL instance, mis. https://v4.example.com
+ *   WHATSAPP_URL_Wuzapi = base URL instance, mis. https://v4.example.com
+ *                         (`WHATSAPP_URL` juga dibaca sebagai fallback umum)
  *
  * Tidak butuh `WHATSAPP_INSTANCE`: tokennya sendiri yang menentukan sesi
  * WhatsApp mana yang dipakai, jadi URL-nya tanpa id instance.
@@ -38,14 +39,15 @@ final class Wuzapi extends AbstractProvider
     /**
      * @param array{
      *     token?:string, url?:string, timeout?:int|float,
-     *     tokens?:array<string,string>, headers?:array<string,string>
+     *     tokens?:array<string,string>, headers?:array<string,string>,
+     *     urls?:array<string,string>
      * }|Config|null $options
      */
     public function __construct(array|Config|null $options = null, ?HttpExecutor $http = null)
     {
         parent::__construct($options, $http);
 
-        $this->baseUrl = $this->config->url(self::DEFAULT_URL);
+        $this->baseUrl = $this->config->url(self::DEFAULT_URL, self::NAME);
     }
 
     public function getProvider(): string
