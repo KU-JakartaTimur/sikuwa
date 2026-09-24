@@ -1,0 +1,244 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Sikuwa\Whatsapp;
+
+/**
+ * Sumber konfigurasi tunggal untuk seluruh provider.
+ *
+ * SDK ini tidak terikat framework. Nilai yang tidak diberikan secara eksplisit
+ * dicari lewat {@see Config::env()}, yang urutannya:
+ *
+ * 1. Resolver yang dipasang lewat {@see Config::useResolver()} — jalur untuk
+ *    aplikasi yang menyimpan konfigurasi di tempat lain.
+ * 2. Helper global `env()` kalau ada (CodeIgniter 4, Laravel) — sehingga SDK
+ *    ini bisa dipasang apa adanya ke aplikasi CodeIgniter tanpa adapter.
+ * 3. `$_ENV` / `$_SERVER` / `getenv()`.
+ *
+ * Kunci yang dikenali: `WA_NOTIFICATION`, `WHATSAPP_PROVIDER`,
+ * `WHATSAPP_TOKEN`, `WHATSAPP_TOKEN_<Provider>`, `WHATSAPP_URL`,
+ * `WHATSAPP_SESSION`, `WHATSAPP_INSTANCE`, `WHATSAPP_TIMEOUT`.
+ */
+final class Config
+{
+    public const DEFAULT_TIMEOUT = 10.0;
+
+    /** Batas atas timeout, dalam detik. */
+    public const MAX_TIMEOUT = 60.0;
+
+    /** @var (callable(string):(string|null))|null */
+    private static $resolver = null;
+
+    /**
+     * @param array<string,string> $tokens Token per provider, mis. ['Fonnte' => 'xxx'].
+     *                                     Menang atas `WHATSAPP_TOKEN_<Provider>`.
+     * @param array<string,string> $headers Header tambahan untuk setiap request.
+     */
+    public function __construct(
+        private ?string $token = null,
+        private ?string $url = null,
+        private ?string $session = null,
+        private ?string $instance = null,
+        private ?float $timeout = null,
+        private array $tokens = [],
+        private ?string $provider = null,
+        private array $headers = []
+    ) {
+    }
+
+    /**
+     * Terima array opsi, instance Config, atau null.
+     *
+     * @param array{
+     *     token?:string, url?:string, session?:string, instance?:string,
+     *     timeout?:int|float, tokens?:array<string,string>, provider?:string,
+     *     headers?:array<string,string>
+     * }|Config|null $options
+     */
+    public static function from(array|Config|null $options): self
+    {
+        if ($options instanceof self) {
+            return $options;
+        }
+
+        if ($options === null) {
+            return new self();
+        }
+
+        return new self(
+            token: $options['token'] ?? null,
+            url: $options['url'] ?? null,
+            session: $options['session'] ?? null,
+            instance: $options['instance'] ?? null,
+            timeout: isset($options['timeout']) ? (float) $options['timeout'] : null,
+            tokens: $options['tokens'] ?? [],
+            provider: $options['provider'] ?? null,
+            headers: $options['headers'] ?? [],
+        );
+    }
+
+    /** Bangun Config murni dari environment. */
+    public static function fromEnvironment(): self
+    {
+        return new self(
+            token: self::env('WHATSAPP_TOKEN'),
+            url: self::env('WHATSAPP_URL'),
+            session: self::env('WHATSAPP_SESSION'),
+            instance: self::env('WHATSAPP_INSTANCE'),
+            timeout: self::env('WHATSAPP_TIMEOUT') === null ? null : (float) self::env('WHATSAPP_TIMEOUT'),
+            provider: self::env('WHATSAPP_PROVIDER'),
+        );
+    }
+
+    /**
+     * Pasang resolver environment sendiri. Kirim null untuk kembali ke deteksi
+     * otomatis. Utamanya dipakai di test supaya tidak menyentuh environment
+     * proses.
+     *
+     * @param (callable(string):(string|null))|null $resolver
+     */
+    public static function useResolver(?callable $resolver): void
+    {
+        self::$resolver = $resolver;
+    }
+
+    /** Baca satu nilai environment. Mengembalikan null untuk nilai kosong. */
+    public static function env(string $key): ?string
+    {
+        if (self::$resolver !== null) {
+            $value = (self::$resolver)($key);
+        } elseif (\function_exists('env')) {
+            $value = \env($key);
+        } else {
+            $value = $_ENV[$key] ?? $_SERVER[$key] ?? \getenv($key);
+        }
+
+        if ($value === null || $value === false || \is_array($value)) {
+            return null;
+        }
+
+        $value = (string) $value;
+
+        return $value === '' ? null : $value;
+    }
+
+    /**
+     * Token khusus satu provider: `tokens[<Provider>]`, lalu
+     * `WHATSAPP_TOKEN_<Provider>`. Tidak pernah jatuh ke `WHATSAPP_TOKEN`.
+     *
+     * Dipakai untuk mendeteksi provider mana saja yang benar-benar
+     * dikonfigurasi, supaya mode `auto` tidak mengundi gateway tanpa token.
+     */
+    public function providerToken(string $provider): ?string
+    {
+        $specific = $this->tokens[$provider] ?? self::env("WHATSAPP_TOKEN_{$provider}");
+
+        return ($specific === null || $specific === '') ? null : $specific;
+    }
+
+    /** Token efektif: token khusus provider, lalu token umum, lalu environment. */
+    public function token(?string $provider = null): string
+    {
+        if ($provider !== null) {
+            $specific = $this->providerToken($provider);
+
+            if ($specific !== null) {
+                return $specific;
+            }
+        }
+
+        if ($this->token !== null && $this->token !== '') {
+            return $this->token;
+        }
+
+        return self::env('WHATSAPP_TOKEN') ?? '';
+    }
+
+    /** URL dasar: nilai eksplisit, lalu `WHATSAPP_URL`, lalu default provider. */
+    public function url(string $default = ''): string
+    {
+        $url = $this->url ?? self::env('WHATSAPP_URL');
+
+        return rtrim(($url === null || $url === '') ? $default : $url, '/');
+    }
+
+    /**
+     * URL yang diberikan eksplisit saja, tanpa melihat environment.
+     *
+     * Dipakai provider dengan endpoint tetap (Fonnte): membaca `WHATSAPP_URL`
+     * di sana berbahaya, karena satu nilai yang ditujukan untuk gateway
+     * self-hosted akan mengalihkan pengiriman ke host yang salah.
+     */
+    public function explicitUrl(): ?string
+    {
+        return ($this->url === null || $this->url === '') ? null : $this->url;
+    }
+
+    /** Id session — hanya dipakai OpenWA. */
+    public function session(): string
+    {
+        return $this->session ?? self::env('WHATSAPP_SESSION') ?? '';
+    }
+
+    /** Id/nama instance — dipakai ApiMe dan Evolution API. */
+    public function instance(): string
+    {
+        return $this->instance ?? self::env('WHATSAPP_INSTANCE') ?? '';
+    }
+
+    /**
+     * Timeout request dalam detik. Nilai di luar 1–60 diabaikan supaya salah
+     * tulis di .env tidak membuat request menggantung selamanya.
+     */
+    public function timeout(): float
+    {
+        $configured = $this->timeout ?? (float) (self::env('WHATSAPP_TIMEOUT') ?? 0);
+
+        return ($configured >= 1.0 && $configured <= self::MAX_TIMEOUT)
+            ? $configured
+            : self::DEFAULT_TIMEOUT;
+    }
+
+    /** Provider terpilih dari konfigurasi; `auto` berarti undi di antara yang siap. */
+    public function provider(): ?string
+    {
+        return $this->provider ?? self::env('WHATSAPP_PROVIDER');
+    }
+
+    /**
+     * Apakah notifikasi WhatsApp diaktifkan (`WA_NOTIFICATION`).
+     *
+     * Bawaannya true kalau kuncinya tidak diisi, supaya SDK tidak diam-diam
+     * mematikan diri sendiri hanya karena sebuah variabel lupa ditulis.
+     *
+     * SDK **tidak pernah** menegakkan nilai ini — SDK tidak tahu kapan
+     * notifikasi pantas dikirim. Nilainya disediakan supaya pemanggil tidak
+     * perlu mengurai environment sendiri.
+     */
+    public static function notificationEnabled(): bool
+    {
+        $value = self::env('WA_NOTIFICATION');
+
+        return $value === null ? true : filter_var($value, FILTER_VALIDATE_BOOLEAN);
+    }
+
+    /** @return array<string,string> */
+    public function headers(): array
+    {
+        return $this->headers;
+    }
+
+    /** Salinan dengan URL berbeda, tanpa mengubah instance asal. */
+    public function withUrl(?string $url): self
+    {
+        if ($url === null || $url === '') {
+            return $this;
+        }
+
+        $clone = clone $this;
+        $clone->url = $url;
+
+        return $clone;
+    }
+}

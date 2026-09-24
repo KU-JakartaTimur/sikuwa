@@ -1,0 +1,237 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Sikuwa\Whatsapp;
+
+use GuzzleHttp\ClientInterface;
+use Sikuwa\Whatsapp\Contracts\Whatsapp;
+use Sikuwa\Whatsapp\Exceptions\ConfigurationException;
+use Sikuwa\Whatsapp\Exceptions\UnknownProviderException;
+use Sikuwa\Whatsapp\Exceptions\WhatsappException;
+use Sikuwa\Whatsapp\Http\HttpExecutor;
+use Sikuwa\Whatsapp\Providers\ApiMe\ApiMe;
+use Sikuwa\Whatsapp\Providers\EvolutionAPI\EvolutionAPI;
+use Sikuwa\Whatsapp\Providers\Fonnte\Fonnte;
+use Sikuwa\Whatsapp\Providers\OpenWA\OpenWA;
+use Sikuwa\Whatsapp\Providers\Wuzapi\Wuzapi;
+
+/**
+ * Titik masuk SDK — pemegang konfigurasi, transport, dan pemilihan gateway.
+ *
+ * ```php
+ * use Sikuwa\Whatsapp\Client;
+ *
+ * $client = new Client([
+ *     'provider' => 'OpenWA',
+ *     'token'    => 'owa_k1_…',
+ *     'url'      => 'http://localhost:2785',
+ *     'session'  => 'my-session',
+ * ]);
+ *
+ * echo $client->send([
+ *     'destination' => '081234567890',
+ *     'message'     => 'Halo dari SIKUWA',
+ * ]);
+ * // Sukses, messageId: 3EB0...
+ * ```
+ *
+ * Opsi yang tidak diisi akan dicari di environment (`WHATSAPP_*`), jadi di
+ * aplikasi CodeIgniter cukup `new Client()` tanpa argumen apa pun.
+ *
+ * Untuk pengujian, suntikkan klien Guzzle ber-handler `MockHandler`:
+ *
+ * ```php
+ * $client = new Client(['provider' => 'Fonnte'], $mockGuzzleClient);
+ * ```
+ */
+final class Client
+{
+    /** Nilai `provider` yang berarti "undi di antara gateway yang punya token". */
+    public const AUTO = 'auto';
+
+    /** @var array<string,class-string<Whatsapp>> */
+    public const PROVIDERS = [
+        'Fonnte' => Fonnte::class,
+        'OpenWA' => OpenWA::class,
+        'ApiMe' => ApiMe::class,
+        'EvolutionAPI' => EvolutionAPI::class,
+        'Wuzapi' => Wuzapi::class,
+    ];
+
+    private Config $config;
+    private HttpExecutor $http;
+
+    /**
+     * @param array{
+     *     provider?:string, token?:string, url?:string, session?:string,
+     *     instance?:string, timeout?:int|float, tokens?:array<string,string>,
+     *     headers?:array<string,string>, httpClient?:ClientInterface
+     * }|Config $options
+     */
+    public function __construct(array|Config $options = [], ?ClientInterface $httpClient = null)
+    {
+        $this->config = Config::from($options);
+
+        $injected = $httpClient
+            ?? (\is_array($options) ? ($options['httpClient'] ?? null) : null);
+
+        $this->http = new HttpExecutor(
+            $injected,
+            $this->config->timeout(),
+            $this->config->headers()
+        );
+    }
+
+    /** @return array<string,class-string<Whatsapp>> */
+    public static function providers(): array
+    {
+        return self::PROVIDERS;
+    }
+
+    /**
+     * Nama gateway yang tokennya benar-benar tersedia.
+     *
+     * Hanya menghitung `WHATSAPP_TOKEN_<Provider>` / opsi `tokens`; token umum
+     * `WHATSAPP_TOKEN` tidak dihitung, karena token itu tidak menunjukkan
+     * gateway mana yang siap dipakai.
+     *
+     * @return array<int,string>
+     */
+    public static function configured(array|Config|null $config = null): array
+    {
+        $config = Config::from($config);
+        $names = [];
+
+        foreach (array_keys(self::PROVIDERS) as $name) {
+            if ($config->providerToken($name) !== null) {
+                $names[] = $name;
+            }
+        }
+
+        return $names;
+    }
+
+    public function config(): Config
+    {
+        return $this->config;
+    }
+
+    public function http(): HttpExecutor
+    {
+        return $this->http;
+    }
+
+    /**
+     * Bangun gateway yang akan dipakai.
+     *
+     * Memanggil method ini berulang kali menghasilkan instance baru; untuk
+     * `provider = auto` itu berarti undiannya diulang setiap kali. Panggil
+     * sekali lalu simpan hasilnya kalau beberapa pesan harus lewat gateway
+     * yang sama.
+     *
+     * @param string|null $name Nama gateway, atau `auto`. Default dari konfigurasi.
+     *
+     * @throws UnknownProviderException
+     * @throws ConfigurationException
+     */
+    public function provider(?string $name = null): Whatsapp
+    {
+        $name ??= $this->config->provider();
+
+        if ($name === null || $name === '') {
+            throw new ConfigurationException(
+                'WHATSAPP_PROVIDER belum diisi, dan tidak ada nama provider yang diberikan'
+            );
+        }
+
+        if (strcasecmp($name, self::AUTO) === 0) {
+            $name = $this->pickAuto();
+        }
+
+        $class = self::resolve($name);
+
+        return new $class($this->config, $this->http);
+    }
+
+    /**
+     * Kirim pesan dan lempar exception bila gagal.
+     *
+     * @param array<string,mixed>|array<int,array<string,mixed>>|string $message
+     *
+     * @throws WhatsappException
+     */
+    public function send(array|string $message): string
+    {
+        return $this->provider()->sendMessage($message);
+    }
+
+    /**
+     * Kirim pesan untuk dicatat ke log — tidak pernah melempar exception.
+     *
+     * Kegagalan dikembalikan sebagai string, dengan teks yang sama seperti
+     * kalau exception-nya dibaca. Cocok untuk notifikasi yang tidak boleh
+     * menggagalkan request pemanggil.
+     *
+     * @param array<string,mixed>|array<int,array<string,mixed>>|string $message
+     */
+    public function notify(array|string $message): string
+    {
+        try {
+            return $this->send($message);
+        } catch (WhatsappException $e) {
+            return $e->getMessage();
+        }
+    }
+
+    /**
+     * Apakah notifikasi diaktifkan (`WA_NOTIFICATION`).
+     *
+     * SDK tidak menegakkannya sendiri — ini hanya pembacaan environment yang
+     * disediakan supaya pemanggil tidak perlu mengurainya sendiri:
+     *
+     * ```php
+     * if (! $client->enabled()) {
+     *     return;
+     * }
+     * ```
+     */
+    public function enabled(): bool
+    {
+        return Config::notificationEnabled();
+    }
+
+    /** @return class-string<Whatsapp> */
+    private static function resolve(string $name): string
+    {
+        foreach (self::PROVIDERS as $candidate => $class) {
+            if (strcasecmp($candidate, $name) === 0) {
+                return $class;
+            }
+        }
+
+        throw UnknownProviderException::forName($name, array_keys(self::PROVIDERS));
+    }
+
+    /**
+     * Pilih gateway acak di antara yang tokennya terisi.
+     *
+     * Pengundian tanpa penyaringan ini akan bisa jatuh ke gateway yang tidak
+     * dikonfigurasi, dan notifikasinya gagal terkirim tanpa sebab yang jelas.
+     */
+    private function pickAuto(): string
+    {
+        $candidates = self::configured($this->config);
+
+        if ($candidates === []) {
+            throw new ConfigurationException(
+                "WHATSAPP_PROVIDER 'auto' tidak punya kandidat: "
+                . 'tidak ada WHATSAPP_TOKEN_<Provider> yang diisi di .env'
+            );
+        }
+
+        shuffle($candidates);
+
+        return $candidates[0];
+    }
+}

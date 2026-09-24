@@ -1,0 +1,11 @@
+/vendor/
+/composer.phar
+/.phpunit.cache/
+.phpunit.result.cache
+/.env
+
+# Library, bukan aplikasi: lock file tidak ikut dipublikasikan.
+/composer.lock
+
+# Catatan kerja agen (memori proyek), bukan bagian dari paket.
+/.workbuddy-ai/

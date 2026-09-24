@@ -1,0 +1,15 @@
+# Baris baru dinormalkan ke LF di dalam repo, apa pun OS kontributornya.
+# Tanpa ini, core.autocrlf=true (default di Windows) membuat checkout lokal
+# jadi CRLF dan setiap commit memunculkan peringatan "LF will be replaced by
+# CRLF" -- padahal paket ini dikonsumsi lintas platform.
+* text=auto eol=lf
+
+# Jaga paket di Packagist tetap ringkas: Packagist membangun arsip dist dengan
+# `git archive`, yang menghormati `export-ignore`, jadi berkas khusus
+# pengembangan tidak ikut terunduh oleh pemakai paket.
+/tests              export-ignore
+/phpunit.xml        export-ignore
+/.phpunit.cache     export-ignore
+/.gitattributes     export-ignore
+/.gitignore         export-ignore
+/composer.lock      export-ignore
