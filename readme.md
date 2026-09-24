@@ -152,7 +152,7 @@ Lihat [`.env.example`](.env.example). Ringkasnya:
 | `WA_NOTIFICATION` | Penanda notifikasi aktif. SDK **tidak** menegakkannya; tersedia lewat `$client->enabled()` |
 | `WHATSAPP_PROVIDER` | `Auto` atau nama gateway |
 | `WHATSAPP_TOKEN_<Provider>` | Token per gateway. Inilah yang dihitung mode `Auto` |
-| `WHATSAPP_TOKEN` | Token umum, dipakai bila token khusus gateway tidak ada |
+| `WHATSAPP_TOKEN` | Token umum, dipakai bila token khusus gateway tidak ada. **Tidak dihitung mode `Auto`** |
 | `WHATSAPP_URL_<Provider>` | Base URL per gateway. **Ini yang sebaiknya dipakai** untuk self-hosted |
 | `WHATSAPP_URL` | Base URL cadangan bila kunci per-provider kosong. **Diabaikan Fonnte** |
 | `WHATSAPP_SESSION` | Khusus OpenWA |
