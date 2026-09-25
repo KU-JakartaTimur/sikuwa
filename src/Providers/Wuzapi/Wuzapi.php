@@ -158,18 +158,22 @@ final class Wuzapi extends AbstractProvider
 
         $prepared = $this->compose(fn (): array => $this->build($items));
 
-        return \count($prepared) === 1
-            ? $this->sendText($prepared[0]['message'])
-            : $this->sendSequentially(
-                $prepared,
-                fn (WuzapiMessage $m): string => $this->sendText($m),
-                static fn (WuzapiMessage $m): string => $m->phone
-            );
+        if (\count($prepared) === 1) {
+            $this->announceTyping($prepared[0]);
+
+            return $this->sendText($prepared[0]['message']);
+        }
+
+        return $this->sendSequentially(
+            $prepared,
+            fn (WuzapiMessage $m): string => $this->sendText($m),
+            static fn (WuzapiMessage $m): string => $m->phone
+        );
     }
 
     /**
-     * @param array<int,array{destination:string,message:string,delay:?int}> $items
-     * @return array<int,array{message:WuzapiMessage,delay:?int}>
+     * @param array<int,array{destination:string,message:string,delay:?int,typing:?int}> $items
+     * @return array<int,array{message:WuzapiMessage,delay:?int,destination:string,typing:?int}>
      *
      * @throws ConfigurationException
      */
@@ -186,7 +190,12 @@ final class Wuzapi extends AbstractProvider
 
             // `delay` dibiarkan null supaya sendSequentially() bisa mengisinya
             // dari pacing; angka 0 tetap berarti "tanpa jeda".
-            $prepared[] = ['message' => $message, 'delay' => $item['delay']];
+            $prepared[] = [
+                'message' => $message,
+                'delay' => $item['delay'],
+                'destination' => $item['destination'],
+                'typing' => $item['typing'],
+            ];
         }
 
         return $prepared;

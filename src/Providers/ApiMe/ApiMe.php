@@ -167,18 +167,22 @@ final class ApiMe extends AbstractProvider
 
         $prepared = $this->compose(fn (): array => $this->build($items));
 
-        return \count($prepared) === 1
-            ? $this->sendText($prepared[0]['message'])
-            : $this->sendSequentially(
-                $prepared,
-                fn (ApiMeMessage $message): string => $this->sendText($message),
-                static fn (ApiMeMessage $message): string => $message->to
-            );
+        if (\count($prepared) === 1) {
+            $this->announceTyping($prepared[0]);
+
+            return $this->sendText($prepared[0]['message']);
+        }
+
+        return $this->sendSequentially(
+            $prepared,
+            fn (ApiMeMessage $message): string => $this->sendText($message),
+            static fn (ApiMeMessage $message): string => $message->to
+        );
     }
 
     /**
-     * @param array<int,array{destination:string,message:string,delay:?int}> $items
-     * @return array<int,array{message:ApiMeMessage,delay:?int}>
+     * @param array<int,array{destination:string,message:string,delay:?int,typing:?int}> $items
+     * @return array<int,array{message:ApiMeMessage,delay:?int,destination:string,typing:?int}>
      *
      * @throws ConfigurationException
      */
@@ -195,7 +199,12 @@ final class ApiMe extends AbstractProvider
 
             // `delay` dibiarkan null supaya sendSequentially() bisa mengisinya
             // dari pacing; angka 0 tetap berarti "tanpa jeda".
-            $prepared[] = ['message' => $message, 'delay' => $item['delay']];
+            $prepared[] = [
+                'message' => $message,
+                'delay' => $item['delay'],
+                'destination' => $item['destination'],
+                'typing' => $item['typing'],
+            ];
         }
 
         return $prepared;

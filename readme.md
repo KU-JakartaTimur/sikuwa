@@ -289,6 +289,91 @@ Karena jedanya dititipkan ke server, Fonnte, OpenWA, dan Evolution API tidak
 menahan klien dua kali. OpenWA juga menambahkan pengacakan di sisinya sendiri
 (`randomizeDelay`).
 
+### Indikator mengetik otomatis
+
+`sendTyping()` di atas eksplisit — pemanggil yang memanggilnya. Kalau ingin
+indikatornya muncul sendiri di setiap `send()`, nyalakan `WHATSAPP_TYPING` dan
+SDK yang mengurusnya: ia menampilkan "sedang mengetik…" untuk tujuan itu, lalu
+**menunggu selama indikatornya tampil** sebelum pesannya dikirim.
+
+Lamanya mengikuti panjang pesan, sama seperti pacing. Pesan 300 karakter yang
+"diketik" dalam satu detik sama tidak wajarnya dengan "Halo" yang diketipkan
+sepuluh detik:
+
+```
+lama = panjang pesan ÷ kecepatan ketik, dijepit antara min dan max
+```
+
+| Kunci | Arti |
+| --- | --- |
+| `WHATSAPP_TYPING` | Saklar on/off. Bawaannya **mati** |
+| `WHATSAPP_TYPING_SPEED` | Kecepatan ketik, dalam **karakter per detik**. Bawaannya 15 |
+| `WHATSAPP_TYPING_MIN` | Lama tampil paling singkat, detik. Bawaannya 2 |
+| `WHATSAPP_TYPING_MAX` | Lama tampil paling lama, detik. Bawaannya 20 |
+
+Dengan bawaannya, 10 karakter menjadi 2 detik, 60 karakter 4 detik, 150 karakter
+10 detik, dan 300 karakter ke atas berhenti di 20 detik.
+
+Bawaannya **mati** karena fitur ini menyisipkan satu request tambahan ke jalur
+kirim dan menahan pemanggil selama durasinya. Hanya saklarnya yang menyalakan —
+mengisi `WHATSAPP_TYPING_SPEED` saja di `.env` tidak mengubah apa pun.
+
+```php
+$client->send(['destination' => '081234567890', 'message' => 'Halo']);
+// 1. POST /chat/presence  { "State": "composing" }
+// 2. tunggu 2 detik
+// 3. POST /chat/send/text
+```
+
+Untuk satu panggilan saja, sertakan kunci `typing`. Berbeda dari `.env` yang
+jadi saklar global, menulis kunci ini di dalam array pesan sudah berarti
+permintaan — jadi ia menyalakan fiturnya tanpa perlu `WHATSAPP_TYPING`:
+
+```php
+$client->send([
+    'destination' => '081234567890',
+    'message'     => 'Laporan harian sudah siap',
+    'typing'      => ['speed' => 8, 'max' => 30],   // atau ['enabled' => false]
+]);
+```
+
+Kuncinya boleh juga ditaruh di tiap pesan dalam pengiriman massal, jadi satu
+pesan bisa dibiarkan tanpa indikator sementara yang lain memakainya:
+
+```php
+$client->send([
+    ['destination' => '0811111111', 'message' => 'Pesan pertama'],
+    ['destination' => '0822222222', 'message' => 'Pesan kedua', 'typing' => ['enabled' => false]],
+]);
+```
+
+Siapa yang benar-benar menunggu berbeda per gateway, dan itu memang sifat
+gateway-nya:
+
+| Gateway | Yang terjadi |
+| --- | --- |
+| Evolution API | Servernya sudah menunggu dan menghapus indikatornya sendiri, jadi SDK **tidak** menunggu lagi — kalau tidak, pemanggil menunggu dua kali |
+| ApiMe, Wuzapi, OpenWA, Fonnte | Indikator hanya menyimpan status, jadi SDK yang menghabiskan durasinya |
+
+Tiga hal yang mudah menjebak, dan sudah ditangani SDK:
+
+- **Fonnte dan OpenWA mengirim seluruh batch dalam satu request.** SDK tidak
+  punya kesempatan menyisipkan indikator di antara pesan, jadi yang dimunculkan
+  hanya indikator untuk **tujuan pesan pertama**. Memunculkan untuk semua tujuan
+  sekaligus justru membuat penerima terakhir melihat "sedang mengetik" lalu diam
+  lama sebelum pesannya datang — lebih buruk daripada tanpa indikator. ApiMe,
+  Evolution API, dan wuzapi mengirim satu per satu, jadi tiap pesan dapat
+  indikatornya sendiri.
+- **Berkas tidak didahului indikator.** `sendImage()` dan `sendFile()` tidak
+  melewati indikator "sedang mengetik" — yang dikirim bukan ketikan, dan
+  mengatakannya akan berbohong. Pakai `sendTyping()` sendiri kalau memang mau.
+- **Indikator yang gagal tidak menggagalkan pesannya.** Mengirim pesan jauh
+  lebih penting daripada hiasannya, jadi kegagalan `composing` (endpoint tidak
+  ada, sesi tidak terhubung, timeout) dilewati begitu saja — dan tidak menambah
+  jeda yang tidak dipakai. Karena SDK ini tidak punya logger, kegagalan itu
+  senyap; kalau perlu diketahui, panggil `sendTyping()` sendiri dan tangani
+  exception-nya.
+
 ### Dua gaya pemanggilan
 
 `send()` melempar exception kalau gagal; `notify()` mengembalikan string dan
@@ -491,6 +576,10 @@ Lihat [`.env.example`](.env.example). Ringkasnya:
 | `WHATSAPP_PACING_INTERVAL` | Jitter acak yang ditambahkan ke tiap jeda siklus, detik. Mis. `20-30` |
 | `WHATSAPP_PACING_LONG_CHARS` | Ambang pesan panjang, karakter (default 300). `0` = aturannya dimatikan |
 | `WHATSAPP_PACING_LONG_FACTOR` | Pengali jeda untuk pesan panjang (default 3). `1` = tidak ada pengalian |
+| `WHATSAPP_TYPING` | Munculkan indikator "sedang mengetik" sendiri sebelum mengirim. Kosong = mati |
+| `WHATSAPP_TYPING_SPEED` | Kecepatan ketik, karakter per detik (default 15) |
+| `WHATSAPP_TYPING_MIN` | Lama indikator tampil paling singkat, detik (default 2) |
+| `WHATSAPP_TYPING_MAX` | Lama indikator tampil paling lama, detik (default 20) |
 
 ### URL per gateway
 
@@ -595,7 +684,7 @@ yang sudah teruji.
 - [x] Jeda antar pesan (pacing)
 - [x] Send Media Image
 - [x] Send Media File
-- [x] Human Being Typing
+- [x] Human Being Typing (`sendTyping()` eksplisit dan otomatis lewat `WHATSAPP_TYPING`)
 
 ## Kredit
 

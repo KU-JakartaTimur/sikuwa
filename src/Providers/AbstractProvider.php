@@ -129,6 +129,20 @@ abstract class AbstractProvider implements Whatsapp
     abstract protected function sendPresence(string $destination, Presence $presence): string;
 
     /**
+     * Apakah gateway ini sudah menunggu dan membersihkan indikatornya sendiri.
+     *
+     * Evolution API mengirim `composing`, menunggu `delay` milidetik, lalu
+     * mengirim `paused` — ketiganya di dalam satu request, sehingga request itu
+     * baru selesai setelah durasinya habis. Menunggu lagi di klien berarti
+     * menunggu dua kali. Gateway lain hanya menyimpan status, jadi durasinya
+     * harus dihabiskan SDK sendiri lewat {@see self::announceTyping()}.
+     */
+    protected function presenceBlocks(): bool
+    {
+        return false;
+    }
+
+    /**
      * Kirim satu gambar.
      *
      * Kunci yang dibaca: `destination` dan `image` (alias `media`), lalu
@@ -274,6 +288,53 @@ abstract class AbstractProvider implements Whatsapp
     }
 
     /**
+     * Tampilkan indikator "sedang mengetik" untuk satu pesan, lalu habiskan
+     * durasinya — dipanggil tepat sebelum pesannya dikirim.
+     *
+     * Ditaruh sedekat mungkin dengan pesannya, bukan sekali di awal batch:
+     * yang membuat indikator ini masuk akal adalah kedekatannya dengan pesan
+     * yang menyusul.
+     *
+     * Kegagalan menampilkan indikator sengaja **tidak** menggagalkan
+     * pengiriman, dan tidak menambah jeda apa pun. Mengirim pesan jauh lebih
+     * penting daripada hiasannya, dan gateway yang tidak mengenal presence
+     * tidak boleh membuat pemanggil kehilangan pesannya. Karena SDK ini tidak
+     * punya logger, kegagalan itu senyap — kalau perlu diketahui, panggil
+     * {@see self::sendTyping()} sendiri dan tangani exception-nya.
+     *
+     * @param array<string,mixed>|null $item Satu item dari {@see self::plan()},
+     *                                       atau satu item `$prepared` provider
+     *                                       yang sudah membawa `destination`
+     *                                       dan `typing`.
+     */
+    protected function announceTyping(?array $item): void
+    {
+        $seconds = $item['typing'] ?? null;
+
+        if (! \is_int($seconds) || $seconds <= 0) {
+            return;
+        }
+
+        $destination = $item['destination'] ?? null;
+
+        if (! \is_string($destination) || trim($destination) === '') {
+            return;
+        }
+
+        try {
+            $this->sendPresence(trim($destination), Presence::from(Presence::COMPOSING, $seconds));
+        } catch (WhatsappException) {
+            return;
+        }
+
+        // Gateway yang menunggu dan membersihkan indikatornya sendiri sudah
+        // menghabiskan durasi itu di dalam request-nya.
+        if (! $this->presenceBlocks()) {
+            $this->pause($seconds);
+        }
+    }
+
+    /**
      * Pasang penidur sendiri. Kirim null untuk kembali ke `sleep()` biasa.
      *
      * Ada supaya jeda antar pesan bisa diuji tanpa benar-benar menunggu —
@@ -315,8 +376,18 @@ abstract class AbstractProvider implements Whatsapp
      * disebut pemanggil selalu menang atas pacing, karena pemanggil yang
      * menyebut angka pasti lebih tahu daripada nilai bawaan.
      *
+     * Hal yang sama berlaku untuk `typing`: lamanya indikator ketik dihitung
+     * dari panjang pesan, jadi ia pun harus diselesaikan selagi isinya masih
+     * teks. Null berarti fitur itu sedang mati.
+     *
+     * Kunci `typing` dibaca di dua tempat, dan keduanya bekerja untuk bentuk
+     * pesan apa pun: di tingkat amplop (berlaku untuk seluruh panggilan) dan
+     * di dalam tiap item (berlaku untuk pesan itu saja). Yang membuatnya
+     * seragam adalah posisinya — `typing` selalu ditulis di sebelah
+     * `destination` dan `message` yang hendak dipengaruhinya.
+     *
      * @param array<string,mixed>|array<int,array<string,mixed>>|string $message
-     * @return array<int,array{destination:string,message:string,delay:?int}>
+     * @return array<int,array{destination:string,message:string,delay:?int,typing:?int}>
      *
      * @throws ConfigurationException
      */
@@ -328,31 +399,22 @@ abstract class AbstractProvider implements Whatsapp
             );
         }
 
-        // Pacing per panggilan. Dua bentuk diterima, karena daftar pesan polos
-        // tidak punya tempat untuk menaruh kunci pengaturan:
+        // Pengaturan per panggilan. Dua bentuk diterima, karena daftar pesan
+        // polos tidak punya tempat untuk menaruh kunci pengaturan:
         //   ['messages' => [...], 'pacing' => [...]]   (amplop)
         //   ['pacing' => [...], [...], [...]]          (kunci di samping daftar)
-        $override = null;
-
-        if (array_key_exists('pacing', $message) && $message['pacing'] !== null) {
-            if (! \is_array($message['pacing'])) {
-                throw new ConfigurationException(
-                    "Gagal menyusun pesan: kunci 'pacing' harus berupa array, "
-                    . "mis. ['cycle' => '0,30', 'interval' => '20-30']"
-                );
-            }
-
-            $override = $message['pacing'];
-        }
+        $override = self::setting($message, 'pacing', "['cycle' => '0,30', 'interval' => '20-30']");
+        $typingOverride = self::setting($message, 'typing', "['speed' => 8, 'max' => 30]");
 
         if (isset($message['messages']) && \is_array($message['messages'])) {
             $message = $message['messages'];
         }
 
         // Dibuang supaya tidak ikut terbaca sebagai pesan pada bentuk daftar.
-        unset($message['pacing']);
+        unset($message['pacing'], $message['typing']);
 
         $pacing = $this->config->pacing()->merge($override);
+        $typing = $this->config->typing()->merge($typingOverride);
 
         // Bulk kalau elemen pertama sendiri berupa array pesan.
         $isBulk = isset($message[0]) && \is_array($message[0]);
@@ -367,6 +429,13 @@ abstract class AbstractProvider implements Whatsapp
             }
 
             $text = (string) $item['message'];
+            $length = Text::length($text);
+
+            // Pada bentuk daftar, tiap item boleh membawa `typing`-nya sendiri
+            // — mis. satu pesan sengaja dibiarkan tanpa indikator. Pada bentuk
+            // satu pesan kunci itu sudah dibaca sebagai pengaturan di atas,
+            // jadi tidak ada yang terbaca dua kali.
+            $typingItem = $typing->merge(self::setting($item, 'typing', "['speed' => 8, 'max' => 30]"));
 
             $items[] = [
                 'destination' => (string) $item['destination'],
@@ -375,11 +444,41 @@ abstract class AbstractProvider implements Whatsapp
                 // pemanggil — daftar bisa datang dengan kunci yang bolong.
                 'delay' => isset($item['delay'])
                     ? max(0, (int) $item['delay'])
-                    : $pacing->delayFor(\count($items), Text::length($text)),
+                    : $pacing->delayFor(\count($items), $length),
+                // Lama indikator ketik juga bergantung pada panjang isi pesan,
+                // jadi ia diselesaikan di sini bersama jeda — satu-satunya
+                // titik di mana isi pesan masih berupa teks.
+                'typing' => $typingItem->durationFor($length),
             ];
         }
 
         return $items;
+    }
+
+    /**
+     * Baca satu kunci pengaturan dari amplop pesan pemanggil.
+     *
+     * @param array<string,mixed> $message
+     * @param string              $contoh  Contoh penulisan yang benar, dipakai
+     *                                     di pesan error supaya pemanggil tahu
+     *                                     bentuk yang diharapkan.
+     * @return array<string,mixed>|null Null bila kuncinya tidak disebut.
+     *
+     * @throws ConfigurationException
+     */
+    private static function setting(array $message, string $key, string $contoh): ?array
+    {
+        if (! array_key_exists($key, $message) || $message[$key] === null) {
+            return null;
+        }
+
+        if (! \is_array($message[$key])) {
+            throw new ConfigurationException(
+                "Gagal menyusun pesan: kunci '{$key}' harus berupa array, mis. {$contoh}"
+            );
+        }
+
+        return $message[$key];
     }
 
     /**
@@ -564,7 +663,14 @@ abstract class AbstractProvider implements Whatsapp
      * Pesan pertama tidak pernah ditunggu: jeda sebelum pengiriman pertama
      * adalah urusan pemanggil, bukan urusan SDK.
      *
-     * @param array<int,array{message:mixed,delay:?int}> $items
+     * Indikator "sedang mengetik" dimunculkan di sini juga, tepat sebelum tiap
+     * pesan. Berbeda dari jeda, pesan **pertama** tetap dapat indikator: justru
+     * pesan pertama itulah yang paling sering dikirim sendirian, dan tanpa
+     * indikator di sana fiturnya tidak akan terasa sama sekali.
+     *
+     * @param array<int,array{message:mixed,delay:?int,destination?:string,typing?:?int}> $items
+     *        `destination` dan `typing` opsional supaya pemanggil lama tidak
+     *        perlu ikut berubah; bila tidak ada, tidak ada indikator.
      * @param callable(mixed):void                      $send
      * @param callable(mixed):string                    $label Penanda pesan untuk pesan error.
      *
@@ -582,6 +688,11 @@ abstract class AbstractProvider implements Whatsapp
             if ($i > 0 && $jeda > 0) {
                 $this->pause($jeda);
             }
+
+            // Indikator menyusul jeda, bukan mendahuluinya: yang dilihat
+            // penerima harus "sedang mengetik" lalu pesannya, bukan "sedang
+            // mengetik", diam lama, baru pesannya.
+            $this->announceTyping($item);
 
             try {
                 $send($item['message']);

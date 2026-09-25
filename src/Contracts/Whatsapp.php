@@ -22,6 +22,10 @@ use Sikuwa\Whatsapp\Session;
  * — termasuk bagian yang bergantung pada panjang isi pesan, karena pesan
  * panjang ditunggu lebih lama — lalu dari bawaan gateway.
  *
+ * Indikator "sedang mengetik" yang dimunculkan SDK sendiri sebelum mengirim
+ * juga berlaku di sini, diatur `WHATSAPP_TYPING`. Selama kunci itu kosong,
+ * jalur kirim berjalan seperti sebelumnya.
+ *
  * Sesi WhatsApp juga seragam: {@see self::createSession()},
  * {@see self::checkSession()}, dan {@see self::showQr()} selalu mengembalikan
  * {@see Session}, apa pun gateway-nya — walaupun tiap gateway menyebutnya
@@ -39,6 +43,8 @@ interface Whatsapp
      *        Jeda antar pesan diatur pacing; untuk menimpanya pada satu
      *        panggilan saja, bungkus list-nya —
      *        `['messages' => [...], 'pacing' => ['cycle' => '0,30']]`.
+     *        Kunci `typing` (`['speed' => 8, 'max' => 30]`) menyalakan
+     *        indikator "sedang mengetik" untuk panggilan itu saja.
      *
      * @return string Detail hasil yang siap dicatat ke log. Setiap provider
      *                mengawalinya dengan `"Sukses"` supaya pemanggil bisa

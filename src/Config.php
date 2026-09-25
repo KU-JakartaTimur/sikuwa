@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Sikuwa\Whatsapp;
 
 use Sikuwa\Whatsapp\Support\Pacing;
+use Sikuwa\Whatsapp\Support\Typing;
 
 /**
  * Sumber konfigurasi tunggal untuk seluruh provider.
@@ -23,7 +24,8 @@ use Sikuwa\Whatsapp\Support\Pacing;
  * `WHATSAPP_URL_<Provider>`, `WHATSAPP_SESSION`, `WHATSAPP_INSTANCE`,
  * `WHATSAPP_ACCOUNT_TOKEN`, `WHATSAPP_TIMEOUT`, `WHATSAPP_PACING_CYCLE`,
  * `WHATSAPP_PACING_INTERVAL`, `WHATSAPP_PACING_LONG_CHARS`,
- * `WHATSAPP_PACING_LONG_FACTOR`.
+ * `WHATSAPP_PACING_LONG_FACTOR`, `WHATSAPP_TYPING`, `WHATSAPP_TYPING_SPEED`,
+ * `WHATSAPP_TYPING_MIN`, `WHATSAPP_TYPING_MAX`.
  */
 final class Config
 {
@@ -45,6 +47,9 @@ final class Config
      *                                  lihat {@see self::accountToken()}.
      * @param Pacing|null $pacing Pengatur jeda antar pesan saat mengirim
      *                            beruntun — lihat {@see self::pacing()}.
+     * @param Typing|null $typing Pengatur indikator "sedang mengetik" yang
+     *                            dimunculkan sendiri sebelum mengirim — lihat
+     *                            {@see self::typing()}.
      */
     public function __construct(
         private ?string $token = null,
@@ -57,7 +62,8 @@ final class Config
         private array $headers = [],
         private array $urls = [],
         private ?string $accountToken = null,
-        private ?Pacing $pacing = null
+        private ?Pacing $pacing = null,
+        private ?Typing $typing = null
     ) {
     }
 
@@ -74,7 +80,10 @@ final class Config
      *         interval?:string|int|array<int,mixed>,
      *         long_chars?:string|int,
      *         long_factor?:string|int
-     *     }|Pacing
+     *     }|Pacing,
+     *     typing?:array{
+     *         enabled?:mixed, speed?:string|int, min?:string|int, max?:string|int
+     *     }|Typing
      * }|Config|null $options
      */
     public static function from(array|Config|null $options): self
@@ -99,6 +108,7 @@ final class Config
             urls: $options['urls'] ?? [],
             accountToken: $options['account_token'] ?? null,
             pacing: self::pacingOption($options['pacing'] ?? null),
+            typing: self::typingOption($options['typing'] ?? null),
         );
     }
 
@@ -114,6 +124,7 @@ final class Config
             provider: self::env('WHATSAPP_PROVIDER'),
             accountToken: self::env('WHATSAPP_ACCOUNT_TOKEN'),
             pacing: self::pacingFromEnv(),
+            typing: self::typingFromEnv(),
         );
     }
 
@@ -147,6 +158,38 @@ final class Config
         }
 
         return \is_array($value) ? Pacing::fromArray($value) : null;
+    }
+
+    /**
+     * Typing dari environment.
+     *
+     * Sama seperti {@see self::pacingFromEnv()}: dikumpulkan di satu tempat
+     * supaya dua jalur yang memakainya tidak bisa berbeda diam-diam saat
+     * kuncinya bertambah.
+     */
+    private static function typingFromEnv(): Typing
+    {
+        return Typing::fromConfig(
+            self::env('WHATSAPP_TYPING'),
+            self::env('WHATSAPP_TYPING_SPEED'),
+            self::env('WHATSAPP_TYPING_MIN'),
+            self::env('WHATSAPP_TYPING_MAX')
+        );
+    }
+
+    /**
+     * Terima opsi `typing` dalam bentuk objek jadi maupun array mentah.
+     *
+     * @return Typing|null Null bila pemanggil tidak mengirim apa pun, supaya
+     *                     {@see self::typing()} masih bisa jatuh ke environment.
+     */
+    private static function typingOption(mixed $value): ?Typing
+    {
+        if ($value instanceof Typing) {
+            return $value;
+        }
+
+        return \is_array($value) ? Typing::fromArray($value) : null;
     }
 
     /**
@@ -298,6 +341,23 @@ final class Config
     public function pacing(): Pacing
     {
         return $this->pacing ?? self::pacingFromEnv();
+    }
+
+    /**
+     * Pengatur indikator "sedang mengetik" yang dimunculkan sebelum mengirim.
+     *
+     * Sama seperti {@see self::pacing()}, bawaannya **mati**: selama
+     * `WHATSAPP_TYPING` kosong, tiap gateway mengirim pesan begitu saja seperti
+     * sebelum fitur ini ada. Fitur ini menyisipkan request tambahan ke jalur
+     * kirim dan menahan pemanggil selama durasinya, jadi ia harus dinyalakan
+     * dengan sengaja.
+     *
+     * Nilai eksplisit di konstruktor menang utuh atas environment — tidak
+     * digabung sebagian, sama seperti `token` dan `url`.
+     */
+    public function typing(): Typing
+    {
+        return $this->typing ?? self::typingFromEnv();
     }
 
     /**

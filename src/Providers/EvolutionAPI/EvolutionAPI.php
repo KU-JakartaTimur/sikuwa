@@ -164,18 +164,22 @@ final class EvolutionAPI extends AbstractProvider
 
         // Jeda sengaja tidak diteruskan ke sendSequentially(): nilainya sudah
         // dititipkan ke server, jadi menunggu di klien juga berarti dua kali.
-        return \count($prepared) === 1
-            ? $this->sendText($prepared[0]['message'])
-            : $this->sendSequentially(
-                $prepared,
-                fn (EvolutionAPIMessage $m): string => $this->sendText($m),
-                static fn (EvolutionAPIMessage $m): string => $m->number
-            );
+        if (\count($prepared) === 1) {
+            $this->announceTyping($prepared[0]);
+
+            return $this->sendText($prepared[0]['message']);
+        }
+
+        return $this->sendSequentially(
+            $prepared,
+            fn (EvolutionAPIMessage $m): string => $this->sendText($m),
+            static fn (EvolutionAPIMessage $m): string => $m->number
+        );
     }
 
     /**
-     * @param array<int,array{destination:string,message:string,delay:?int}> $items
-     * @return array<int,array{message:EvolutionAPIMessage,delay:?int}>
+     * @param array<int,array{destination:string,message:string,delay:?int,typing:?int}> $items
+     * @return array<int,array{message:EvolutionAPIMessage,delay:?int,destination:string,typing:?int}>
      *
      * @throws ConfigurationException
      */
@@ -196,7 +200,12 @@ final class EvolutionAPI extends AbstractProvider
 
             // Jeda dititipkan ke server lewat payload, jadi klien tidak perlu
             // ikut menunggu di antara request.
-            $prepared[] = ['message' => $message, 'delay' => 0];
+            $prepared[] = [
+                'message' => $message,
+                'delay' => 0,
+                'destination' => $item['destination'],
+                'typing' => $item['typing'],
+            ];
         }
 
         return $prepared;
@@ -260,6 +269,19 @@ final class EvolutionAPI extends AbstractProvider
         $key = \is_array($body['key'] ?? null) ? $body['key'] : [];
 
         return 'Sukses, messageId: ' . ($key['id'] ?? '-');
+    }
+
+    /**
+     * Evolution API menahan dan membersihkan indikatornya sendiri.
+     *
+     * Satu panggilan `sendPresence()` sudah berisi composing, jeda, dan paused
+     * sekaligus, jadi {@see AbstractProvider::announceTyping()} tidak boleh
+     * menunggu lagi — pemanggil akan menunggu dua kali lebih lama daripada
+     * yang diminta.
+     */
+    protected function presenceBlocks(): bool
+    {
+        return true;
     }
 
     /**

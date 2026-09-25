@@ -259,6 +259,14 @@ final class Fonnte extends AbstractProvider
 
         $payload = $this->compose(fn (): string => (new FonnteBulkMessage($items))->toJson());
 
+        // Fonnte menerima seluruh batch dalam satu field `data`, jadi SDK tidak
+        // punya kesempatan menyisipkan indikator di antara pesan. Yang bisa
+        // dilakukan adalah memunculkannya untuk tujuan pesan pertama:
+        // memunculkan untuk semua tujuan sekaligus justru membuat penerima
+        // terakhir melihat "sedang mengetik" lalu diam lama sebelum pesannya
+        // datang, dan itu lebih buruk daripada tanpa indikator.
+        $this->announceTyping($items[0] ?? null);
+
         return $this->sent(
             $this->http->post(
                 $this->urlApi,

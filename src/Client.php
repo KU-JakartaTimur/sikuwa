@@ -66,7 +66,8 @@ final class Client
      * @param array{
      *     provider?:string, token?:string, url?:string, session?:string,
      *     instance?:string, timeout?:int|float, tokens?:array<string,string>,
-     *     headers?:array<string,string>, httpClient?:ClientInterface
+     *     headers?:array<string,string>, httpClient?:ClientInterface,
+     *     pacing?:array<string,mixed>, typing?:array<string,mixed>
      * }|Config $options
      */
     public function __construct(array|Config $options = [], ?ClientInterface $httpClient = null)
@@ -168,6 +169,19 @@ final class Client
      *         ['destination' => '0822222222', 'message' => 'Pesan kedua'],
      *     ],
      *     'pacing' => ['cycle' => '0,45', 'interval' => '10-20'],
+     * ]);
+     * ```
+     *
+     * Indikator "sedang mengetik" yang dimunculkan sendiri sebelum mengirim
+     * diatur lewat `WHATSAPP_TYPING`; kunci `typing` menimpanya untuk satu
+     * panggilan — dan menulis kunci itu sudah cukup menyalakannya, tanpa perlu
+     * `WHATSAPP_TYPING` di `.env`:
+     *
+     * ```php
+     * $client->send([
+     *     'destination' => '081234567890',
+     *     'message'     => 'Laporan harian sudah siap',
+     *     'typing'      => ['speed' => 8, 'max' => 30],
      * ]);
      * ```
      *
