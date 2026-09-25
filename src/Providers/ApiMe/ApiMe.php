@@ -12,6 +12,7 @@ use Sikuwa\Whatsapp\Providers\AbstractProvider;
 use Sikuwa\Whatsapp\Session;
 use Sikuwa\Whatsapp\Support\File;
 use Sikuwa\Whatsapp\Support\PhoneNumber;
+use Sikuwa\Whatsapp\Support\Presence;
 
 /**
  * Gateway ApiMe (https://github.com/open-apime/apime), WhatsApp self-hosted
@@ -269,6 +270,45 @@ final class ApiMe extends AbstractProvider
         $data = \is_array($body['data'] ?? null) ? $body['data'] : [];
 
         return 'Sukses, messageId: ' . ($data['whatsappId'] ?? $data['id'] ?? '-');
+    }
+
+    /**
+     * Tampilkan atau hapus indikator "sedang mengetik":
+     * `POST /api/instances/{id}/whatsapp/presence`.
+     *
+     * Endpoint ini menuntut token ber-scope instance, sama seperti pengiriman
+     * pesan: token user (JWT) ditolak dengan HTTP 403. `duration` tidak ikut
+     * dikirim — ApiMe menyimpan statusnya sampai dihapus dengan `paused`.
+     *
+     * @throws ApiException
+     * @throws ConfigurationException
+     */
+    protected function sendPresence(string $destination, Presence $presence): string
+    {
+        if ($this->instanceId === '') {
+            throw new ConfigurationException('WHATSAPP_INSTANCE belum diisi di .env');
+        }
+
+        $to = str_contains($destination, '@')
+            ? $destination
+            : PhoneNumber::normalize($destination);
+
+        if ($to === '') {
+            throw new ConfigurationException("Nomor tujuan '{$destination}' tidak valid");
+        }
+
+        $state = match (true) {
+            $presence->isRecording() => 'recording',
+            $presence->isPaused() => 'paused',
+            default => 'composing',
+        };
+
+        $this->postJson(
+            "{$this->baseUrl}/api/instances/" . rawurlencode($this->instanceId) . '/whatsapp/presence',
+            ['to' => $to, 'state' => $state]
+        );
+
+        return $this->presenceResult($presence, $to);
     }
 
     /** POST /api/instances/{instanceId}/messages/text */

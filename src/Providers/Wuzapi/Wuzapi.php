@@ -12,6 +12,7 @@ use Sikuwa\Whatsapp\Providers\AbstractProvider;
 use Sikuwa\Whatsapp\Session;
 use Sikuwa\Whatsapp\Support\File;
 use Sikuwa\Whatsapp\Support\PhoneNumber;
+use Sikuwa\Whatsapp\Support\Presence;
 
 /**
  * Gateway wuzapi (https://github.com/asternic/wuzapi), WhatsApp self-hosted
@@ -191,6 +192,36 @@ final class Wuzapi extends AbstractProvider
         return $prepared;
     }
 
+    /**
+     * Tampilkan atau hapus indikator "sedang mengetik": `POST /chat/presence`.
+     *
+     * wuzapi tidak punya keadaan "recording" tersendiri: merekam suara
+     * dikirim sebagai `composing` dengan `Media` berisi `audio`. `duration`
+     * tidak ikut dikirim — statusnya bertahan sampai dihapus dengan `paused`.
+     *
+     * @throws ApiException
+     * @throws ConfigurationException
+     */
+    protected function sendPresence(string $destination, Presence $presence): string
+    {
+        $phone = str_contains($destination, '@')
+            ? $destination
+            : PhoneNumber::normalize($destination);
+
+        if ($phone === '') {
+            throw new ConfigurationException("Nomor tujuan '{$destination}' tidak valid");
+        }
+
+        $this->postChat('chat/presence', [
+            'Phone' => $phone,
+            'State' => $presence->isPaused() ? 'paused' : 'composing',
+            // Penanda rekaman suara; string kosong berarti pesan teks biasa.
+            'Media' => $presence->isRecording() ? 'audio' : '',
+        ]);
+
+        return $this->presenceResult($presence, $phone);
+    }
+
     /** POST /chat/send/text */
     private function sendText(WuzapiMessage $message): string
     {
@@ -264,8 +295,25 @@ final class Wuzapi extends AbstractProvider
      */
     private function sendJson(string $kind, array $payload): array
     {
+        return $this->postChat("chat/send/{$kind}", $payload);
+    }
+
+    /**
+     * POST JSON ke jalur mana pun di bawah `/chat`, lalu wajibkan `success`.
+     *
+     * Dipisahkan dari {@see self::sendJson()} karena indikator ketik tidak
+     * berada di bawah `/chat/send` melainkan di `/chat/presence`, sementara
+     * amplop balasan dan cara menolaknya sama persis.
+     *
+     * @param array<string,mixed> $payload
+     * @return array<string,mixed>
+     *
+     * @throws ApiException
+     */
+    private function postChat(string $path, array $payload): array
+    {
         $response = $this->http->post(
-            "{$this->baseUrl}/chat/send/{$kind}",
+            "{$this->baseUrl}/{$path}",
             (string) json_encode($payload),
             $this->jsonHeaders()
         );

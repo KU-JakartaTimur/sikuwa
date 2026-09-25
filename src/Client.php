@@ -249,6 +249,31 @@ final class Client
     }
 
     /**
+     * Tampilkan atau hapus indikator "sedang mengetik".
+     *
+     * `duration` wajib diisi saat menampilkan indikator — Fonnte dan
+     * Evolution API memakainya untuk menentukan berapa lama indikator tampil.
+     * Di Evolution API panggilan ini ikut menunggu selama durasi tersebut,
+     * karena servernya yang menidurkan permintaan.
+     *
+     * ```php
+     * $client->sendTyping(['destination' => '081234567890', 'duration' => 5]);
+     * $client->send(['destination' => '081234567890', 'message' => 'Halo']);
+     * $client->sendTyping(['destination' => '081234567890', 'state' => 'paused']);
+     * ```
+     *
+     * @param array<string,mixed> $message Kunci `destination`, `state`, dan
+     *                                     `duration`. Lihat
+     *                                     {@see Contracts\Whatsapp::sendTyping()}.
+     *
+     * @throws WhatsappException
+     */
+    public function sendTyping(array $message): string
+    {
+        return $this->provider()->sendTyping($message);
+    }
+
+    /**
      * Apakah notifikasi diaktifkan (`WA_NOTIFICATION`).
      *
      * SDK tidak menegakkannya sendiri — ini hanya pembacaan environment yang

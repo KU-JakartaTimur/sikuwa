@@ -14,6 +14,7 @@ use Sikuwa\Whatsapp\Providers\AbstractProvider;
 use Sikuwa\Whatsapp\Session;
 use Sikuwa\Whatsapp\Support\File;
 use Sikuwa\Whatsapp\Support\PhoneNumber;
+use Sikuwa\Whatsapp\Support\Presence;
 
 /**
  * Gateway Fonnte (https://fonnte.com), layanan WhatsApp berbayar berbasis cloud.
@@ -316,16 +317,66 @@ final class Fonnte extends AbstractProvider
     }
 
     /**
-     * Terjemahkan balasan Fonnte menjadi string hasil.
+     * Tampilkan atau hentikan indikator "sedang mengetik": `POST /typing`.
+     *
+     * Fonnte memakai satu endpoint dengan kolom `stop`, bukan dua keadaan yang
+     * saling menggantikan seperti gateway lain. `duration` juga dituntut di
+     * sini — itulah lama indikatornya tampil, dan Fonnte sendiri yang
+     * menghitungnya, bukan SDK.
+     *
+     * Fonnte tidak punya indikator merekam suara, jadi permintaan `recording`
+     * ditolak dengan jelas alih-alih diam-diam berubah menjadi indikator
+     * mengetik.
+     *
+     * @throws ApiException
+     * @throws ConfigurationException
+     */
+    protected function sendPresence(string $destination, Presence $presence): string
+    {
+        $target = PhoneNumber::normalize($destination);
+
+        if ($target === '') {
+            throw new ConfigurationException("Nomor tujuan '{$destination}' tidak valid");
+        }
+
+        if ($presence->isRecording()) {
+            throw new ConfigurationException(
+                'Fonnte tidak punya indikator merekam suara, hanya indikator mengetik: '
+                . "pakai 'composing', atau gateway lain untuk 'recording'"
+            );
+        }
+
+        // `duration` selalu ikut karena Fonnte menandainya wajib; saat
+        // berhenti, angkanya tidak lagi menentukan apa pun.
+        $form = ['target' => $target, 'duration' => $presence->duration];
+
+        if ($presence->isPaused()) {
+            // Boolean Fonnte dibaca dari teks, sama seperti di Device API.
+            $form['stop'] = 'true';
+        }
+
+        $this->accepted(
+            $this->http->post("{$this->deviceBase}/typing", $form, $this->authHeaders()),
+            'indikator ketik'
+        );
+
+        return $this->presenceResult($presence, $target);
+    }
+
+    /**
+     * Baca balasan Fonnte dan pastikan `status` benar-benar berhasil.
      *
      * Fonnte selalu membalas HTTP 200, bahkan saat menolak; keberhasilan
-     * sebenarnya ada di field `status`. Dipakai bersama oleh pengiriman teks
-     * dan pengiriman berkas supaya keduanya melaporkan hasil dengan kalimat
-     * yang sama.
+     * sebenarnya ada di field `status`. Dipakai bersama oleh pengiriman teks,
+     * pengiriman berkas, dan indikator ketik supaya ketiganya ditolak dengan
+     * kalimat yang sama.
+     *
+     * @param string $subject Apa yang ditolak, untuk pesan error — mis. `pesan`.
+     * @return array<string,mixed>
      *
      * @throws ApiException
      */
-    private function sent(HttpResponse $response): string
+    private function accepted(HttpResponse $response, string $subject = 'pesan'): array
     {
         $body = $this->read($response);
 
@@ -339,12 +390,24 @@ final class Fonnte extends AbstractProvider
             $reason = $this->detail($body);
 
             throw new ApiException(
-                $reason !== '' ? $reason : "Fonnte menolak pesan (HTTP {$response->status})",
+                $reason !== '' ? $reason : "Fonnte menolak {$subject} (HTTP {$response->status})",
                 $response->status,
                 $body,
                 $reason !== '' ? $reason : null
             );
         }
+
+        return $body;
+    }
+
+    /**
+     * Terjemahkan balasan Fonnte menjadi string hasil pengiriman.
+     *
+     * @throws ApiException
+     */
+    private function sent(HttpResponse $response): string
+    {
+        $body = $this->accepted($response);
 
         $detail = $body['detail'] ?? '';
         $detail = \is_array($detail) ? implode('; ', array_map('strval', $detail)) : (string) $detail;

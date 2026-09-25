@@ -124,6 +124,61 @@ interface Whatsapp
     public function sendFile(array $message): string;
 
     /**
+     * Tampilkan (atau hapus) indikator "sedang mengetik" — supaya balasan bot
+     * tidak muncul seketika seperti mesin.
+     *
+     * Bentuknya seragam di semua gateway:
+     *
+     * ```php
+     * $client->sendTyping([
+     *     'destination' => '081234567890',
+     *     'state'       => 'composing',   // composing | paused | recording
+     *     'duration'    => 5,             // detik
+     * ]);
+     * ```
+     *
+     * `state` boleh dikosongkan, artinya `composing`. Istilah gateway lain
+     * juga diterima dan dipetakan ke kosakata di atas — `typing` menjadi
+     * `composing`, `stop` menjadi `paused`, `audio` menjadi `recording`.
+     *
+     * **`duration` wajib diisi saat menampilkan indikator** (jadi tidak perlu
+     * untuk `paused`). Dua gateway memakainya untuk menentukan berapa lama
+     * indikator tampil, dan tanpa angka keduanya tidak menampilkan apa pun:
+     *
+     * - **Fonnte** menuntut `duration` di sisi server;
+     * - **Evolution API** menahan indikator selama `duration` lalu
+     *   menghapusnya sendiri — dan **panggilan ini ikut menunggu** selama itu,
+     *   karena servernya yang menidurkan permintaan. Durasi panjang dipotong
+     *   Evolution menjadi siklus 20 detik.
+     *
+     * Tiga gateway sisanya mengabaikan `duration`: statusnya bertahan sampai
+     * pemanggil menghapusnya sendiri dengan `state => 'paused'`, atau sampai
+     * sebuah pesan benar-benar terkirim. Jadi rangkaian yang aman di semua
+     * gateway adalah menampilkan indikator, lalu menghapusnya:
+     *
+     * ```php
+     * $client->sendTyping(['destination' => $to, 'duration' => 3]);
+     * $client->sendMessage(['destination' => $to, 'message' => 'Halo']);
+     * $client->sendTyping(['destination' => $to, 'state' => 'paused']);
+     * ```
+     *
+     * Fonnte tidak punya indikator merekam suara; meminta `recording` di sana
+     * melempar {@see Exceptions\ConfigurationException}, bukan diam-diam
+     * mengirim indikator mengetik.
+     *
+     * @param array<string,mixed> $message Kunci `destination` (wajib),
+     *                                     `state` (opsional, default
+     *                                     `composing`), dan `duration` (wajib
+     *                                     saat menampilkan indikator).
+     *
+     * @return string Detail hasil yang siap dicatat ke log, berawalan
+     *                `"Sukses"` seperti {@see self::sendMessage()}.
+     *
+     * @throws \Sikuwa\Whatsapp\Exceptions\WhatsappException
+     */
+    public function sendTyping(array $message): string;
+
+    /**
      * Buat sesi/instance baru di gateway.
      *
      * Nama sesi diambil dari `$options` bila ada, selain itu dari konfigurasi

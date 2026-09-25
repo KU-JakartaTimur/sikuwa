@@ -12,6 +12,7 @@ use Sikuwa\Whatsapp\Providers\AbstractProvider;
 use Sikuwa\Whatsapp\Session;
 use Sikuwa\Whatsapp\Support\File;
 use Sikuwa\Whatsapp\Support\PhoneNumber;
+use Sikuwa\Whatsapp\Support\Presence;
 
 /**
  * Gateway OpenWA (https://github.com/rmyndharis/OpenWA), WhatsApp self-hosted
@@ -225,6 +226,43 @@ final class OpenWA extends AbstractProvider
         );
 
         return 'Sukses, messageId: ' . ($body['messageId'] ?? '-');
+    }
+
+    /**
+     * Tampilkan atau hapus indikator "sedang mengetik": `POST …/chats/typing`.
+     *
+     * OpenWA memakai kata yang berbeda dari kosakata baku di sini — `typing`
+     * untuk mengetik, `recording` untuk merekam suara — jadi penerjemahannya
+     * dilakukan di tempat ini. `duration` tidak ikut dikirim: OpenWA
+     * menyimpan statusnya sampai dihapus dengan `paused`, atau sampai ada
+     * pesan yang benar-benar terkirim.
+     *
+     * @throws ApiException
+     * @throws ConfigurationException
+     */
+    protected function sendPresence(string $destination, Presence $presence): string
+    {
+        if ($this->sessionId === '') {
+            throw new ConfigurationException('WHATSAPP_SESSION belum diisi di .env');
+        }
+
+        // Sama seperti pengiriman berkas: `chatId` wajib berupa JID lengkap,
+        // dan `toWid()` membentuk "@c.us" begitu nomornya kosong.
+        $chatId = PhoneNumber::toWid($destination);
+
+        if (str_starts_with($chatId, '@')) {
+            throw new ConfigurationException("Nomor tujuan '{$destination}' tidak valid");
+        }
+
+        $state = match (true) {
+            $presence->isRecording() => 'recording',
+            $presence->isPaused() => 'paused',
+            default => 'typing',
+        };
+
+        $this->postJson($this->sessionUrl('chats/typing'), ['chatId' => $chatId, 'state' => $state]);
+
+        return $this->presenceResult($presence, $chatId);
     }
 
     /** POST /api/sessions/{sessionId}/messages/send-text */

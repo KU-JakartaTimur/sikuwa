@@ -12,6 +12,7 @@ use Sikuwa\Whatsapp\Providers\AbstractProvider;
 use Sikuwa\Whatsapp\Session;
 use Sikuwa\Whatsapp\Support\File;
 use Sikuwa\Whatsapp\Support\PhoneNumber;
+use Sikuwa\Whatsapp\Support\Presence;
 
 /**
  * Gateway Evolution API (https://github.com/evolution-foundation/evolution-api),
@@ -259,6 +260,52 @@ final class EvolutionAPI extends AbstractProvider
         $key = \is_array($body['key'] ?? null) ? $body['key'] : [];
 
         return 'Sukses, messageId: ' . ($key['id'] ?? '-');
+    }
+
+    /**
+     * Tampilkan atau hapus indikator "sedang mengetik":
+     * `POST /chat/sendPresence/{instance}`.
+     *
+     * Berbeda dari gateway lain, Evolution **menahan sendiri** indikatornya:
+     * servernya mengirim `composing`, menunggu `delay`, lalu mengirim
+     * `paused`. Dua akibatnya perlu diketahui pemanggil:
+     *
+     * - `delay` wajib diisi. Tanpa angka, Evolution mengirim `composing` lalu
+     *   langsung `paused` tanpa jeda, sehingga indikatornya tidak sempat
+     *   terlihat — karena itu `duration` dituntut, bukan opsional;
+     * - panggilan ini ikut MENUNGGU selama `duration`, karena yang menidurkan
+     *   permintaan adalah servernya. Durasi di atas 20 detik dipotong
+     *   Evolution menjadi beberapa siklus.
+     *
+     * @throws ApiException
+     * @throws ConfigurationException
+     */
+    protected function sendPresence(string $destination, Presence $presence): string
+    {
+        if ($this->instanceName === '') {
+            throw new ConfigurationException('WHATSAPP_INSTANCE belum diisi di .env');
+        }
+
+        $number = str_contains($destination, '@')
+            ? $destination
+            : PhoneNumber::normalize($destination);
+
+        if ($number === '') {
+            throw new ConfigurationException("Nomor tujuan '{$destination}' tidak valid");
+        }
+
+        $this->postJson(
+            "{$this->baseUrl}/chat/sendPresence/" . rawurlencode($this->instanceName),
+            [
+                'number' => $number,
+                'presence' => $presence->state,
+                // Skema Evolution menandai `delay` wajib, dan satuannya
+                // milidetik — bukan detik seperti di kunci pemanggil.
+                'delay' => $presence->milliseconds(),
+            ]
+        );
+
+        return $this->presenceResult($presence, $number);
     }
 
     /** POST /message/sendText/{instanceName} */

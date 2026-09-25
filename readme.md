@@ -175,6 +175,58 @@ Empat hal yang mudah menjebak, dan sudah ditangani SDK:
   (super/advanced/ultra). Penolakannya datang sebagai `reason` biasa, jadi
   pesannya muncul apa adanya di log.
 
+### Indikator "sedang mengetik"
+
+Balasan yang muncul seketika mudah dikenali sebagai robot. `sendTyping()` membuat
+WhatsApp menampilkan "sedang mengetik…" lebih dulu:
+
+```php
+$client->sendTyping(['destination' => '081234567890', 'duration' => 3]);
+
+$client->send(['destination' => '081234567890', 'message' => 'Halo']);
+
+// Hapus indikatornya bila pesannya tidak jadi dikirim.
+$client->sendTyping(['destination' => '081234567890', 'state' => 'paused']);
+```
+
+| Kunci | Wajib | Keterangan |
+| --- | --- | --- |
+| `destination` | ya | Sama seperti `sendMessage()` |
+| `state` | tidak | `composing` (bawaan), `paused`, atau `recording` |
+| `duration` | ya, kecuali `paused` | Lama indikator ditampilkan, dalam **detik** |
+
+`state` boleh memakai istilah gateway mana pun; SDK memetakannya ke kosakata di
+atas — `typing` menjadi `composing`, `stop` menjadi `paused`, `audio` menjadi
+`recording`. Jadi kode yang sama jalan di semua gateway.
+
+**`duration` wajib** saat menampilkan indikator, dan itu bukan sekadar
+formalitas: Fonnte menuntutnya di sisi server, sedangkan Evolution API menahan
+indikator selama durasi itu lalu menghapusnya sendiri. Dengan durasi 0 keduanya
+tidak menampilkan apa pun — dan itu gagal tanpa pesan apa-apa, jadi SDK
+menolaknya lebih dulu dengan `ConfigurationException`.
+
+| Gateway | Endpoint | Keadaan | `duration` |
+| --- | --- | --- | --- |
+| Fonnte | `POST /typing` | ketik atau berhenti (`stop`) | dipakai; wajib |
+| OpenWA | `POST /api/sessions/{id}/chats/typing` | `typing` \| `recording` \| `paused` | diabaikan |
+| ApiMe | `POST /api/instances/{id}/whatsapp/presence` | `composing` \| `recording` \| `paused` | diabaikan |
+| Evolution API | `POST /chat/sendPresence/{instance}` | `composing` \| `recording` \| `paused` | dipakai, satuan milidetik |
+| Wuzapi | `POST /chat/presence` | `composing` + `Media: audio` \| `paused` | diabaikan |
+
+Tiga hal yang mudah menjebak, dan sudah ditangani SDK:
+
+- **Evolution API ikut menahan pemanggil.** Servernya yang mengirim
+  `composing`, menunggu `delay`, lalu mengirim `paused` — jadi panggilan ini
+  **memblokir** selama `duration`. Durasi di atas 20 detik dipotong Evolution
+  menjadi beberapa siklus. Ini satu-satunya gateway yang indikatornya hilang
+  sendiri; empat lainnya menyimpan statusnya sampai dihapus dengan `paused`
+  atau sampai ada pesan yang benar-benar terkirim.
+- **Fonnte tidak punya indikator merekam suara**, hanya indikator mengetik.
+  Meminta `recording` di sana melempar `ConfigurationException` — bukan
+  diam-diam berubah menjadi indikator mengetik.
+- **Wuzapi tidak punya keadaan `recording`.** Merekam suara dikirim sebagai
+  `composing` dengan `Media` berisi `audio`, dan itu yang disusun SDK.
+
 ### Jeda antar pesan (pacing)
 
 Mengirim beruntun dengan jeda yang seragam mudah dikenali sebagai robot. Pacing

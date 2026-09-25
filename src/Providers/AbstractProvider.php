@@ -14,6 +14,7 @@ use Sikuwa\Whatsapp\Http\HttpExecutor;
 use Sikuwa\Whatsapp\Http\HttpResponse;
 use Sikuwa\Whatsapp\Session;
 use Sikuwa\Whatsapp\Support\File;
+use Sikuwa\Whatsapp\Support\Presence;
 use Sikuwa\Whatsapp\Support\Text;
 
 /**
@@ -113,6 +114,21 @@ abstract class AbstractProvider implements Whatsapp
     abstract protected function sendMedia(string $destination, File $file, string $caption): string;
 
     /**
+     * Tampilkan atau hapus indikator "sedang mengetik" di satu tujuan.
+     *
+     * Sengaja abstrak: hanya endpoint dan nama kolomnya yang berbeda antar
+     * gateway — Fonnte memakai `/typing` dengan `target` dan `stop`, OpenWA
+     * memakai `chats/typing` dengan `typing`/`paused`, Evolution API menuntut
+     * `delay` dalam milidetik, wuzapi menandai rekaman suara lewat `Media`.
+     * Yang seragam adalah cara pemanggil memintanya, dan itu dirapikan di
+     * {@see Support\Presence}.
+     *
+     * @param string   $destination Nomor tujuan, sama seperti `sendMessage()`
+     * @param Presence $presence    Keadaan yang diminta, sudah dinormalkan
+     */
+    abstract protected function sendPresence(string $destination, Presence $presence): string;
+
+    /**
      * Kirim satu gambar.
      *
      * Kunci yang dibaca: `destination` dan `image` (alias `media`), lalu
@@ -150,6 +166,43 @@ abstract class AbstractProvider implements Whatsapp
     public function sendFile(array $message): string
     {
         return $this->dispatchMedia($message, 'file');
+    }
+
+    /**
+     * Tampilkan atau hapus indikator "sedang mengetik".
+     *
+     * Kunci yang dibaca: `destination`, lalu opsional `state` (default
+     * `composing`) dan `duration` dalam detik. `duration` wajib saat
+     * menampilkan indikator — Fonnte dan Evolution API memakainya untuk
+     * menentukan berapa lama indikator tampil, dan tanpa angka keduanya tidak
+     * menampilkan apa pun.
+     *
+     * ```php
+     * $client->sendTyping([
+     *     'destination' => '081234567890',
+     *     'state'       => 'composing',
+     *     'duration'    => 5,
+     * ]);
+     * ```
+     *
+     * @param array<string,mixed> $message
+     *
+     * @throws WhatsappException
+     */
+    public function sendTyping(array $message): string
+    {
+        $destination = $message['destination'] ?? null;
+
+        if (! \is_string($destination) || trim($destination) === '') {
+            throw new ConfigurationException("Gagal menyusun indikator ketik: kunci 'destination' belum diisi");
+        }
+
+        $state = $message['state'] ?? '';
+
+        return $this->sendPresence(
+            trim($destination),
+            Presence::from(\is_string($state) ? $state : '', $message['duration'] ?? null)
+        );
     }
 
     /**
@@ -202,6 +255,22 @@ abstract class AbstractProvider implements Whatsapp
     public function executor(): HttpExecutor
     {
         return $this->http;
+    }
+
+    /**
+     * Kalimat hasil untuk pengiriman indikator ketik.
+     *
+     * Ditaruh di sini, bukan di tiap provider, supaya kelima gateway
+     * melaporkan hal yang sama dengan kata yang sama — pemanggil yang mencatat
+     * hasilnya ke log tidak perlu tahu gateway mana yang sedang dipakai.
+     *
+     * @param string $destination Tujuan dalam bentuk yang dipakai gateway ini
+     *                            (nomor, JID, atau WID), untuk memudahkan
+     *                            penelusuran di log.
+     */
+    protected function presenceResult(Presence $presence, string $destination): string
+    {
+        return "Sukses, indikator {$presence->label()} dikirim ke {$destination}";
     }
 
     /**
