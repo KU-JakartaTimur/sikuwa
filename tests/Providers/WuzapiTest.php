@@ -157,7 +157,7 @@ final class WuzapiTest extends TestCase
 
         $backend = new MockBackend([MockBackend::json(['success' => true, 'data' => ['Id' => 'a']])]);
 
-        new Wuzapi(null, $backend->executor())
+        (new Wuzapi(null, $backend->executor()))
             ->sendMessage(['destination' => '0811', 'message' => 'a']);
 
         self::assertSame('https://env-wuzapi.test/chat/send/text', (string) $backend->lastRequest()?->getUri());

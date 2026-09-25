@@ -167,7 +167,7 @@ final class FonnteTest extends TestCase
         self::fakeEnv(['WHATSAPP_URL' => 'http://localhost:2785', 'WHATSAPP_TOKEN' => 'dari-env']);
         $backend = new MockBackend([MockBackend::json(['status' => true])]);
 
-        new Fonnte(null, $backend->executor())
+        (new Fonnte(null, $backend->executor()))
             ->sendMessage(['destination' => '0811', 'message' => 'a']);
 
         self::assertSame('https://api.fonnte.com/send', (string) $backend->lastRequest()?->getUri());
@@ -189,7 +189,7 @@ final class FonnteTest extends TestCase
         self::fakeEnv(['WHATSAPP_TOKEN' => 'umum', 'WHATSAPP_TOKEN_Fonnte' => 'khusus']);
         $backend = new MockBackend([MockBackend::json(['status' => true])]);
 
-        new Fonnte(null, $backend->executor())
+        (new Fonnte(null, $backend->executor()))
             ->sendMessage(['destination' => '0811', 'message' => 'a']);
 
         self::assertSame('khusus', $backend->lastHeader('Authorization'));

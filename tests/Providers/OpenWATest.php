@@ -191,7 +191,7 @@ final class OpenWATest extends TestCase
 
         $backend = new MockBackend([MockBackend::json(['messageId' => 'x'])]);
 
-        new OpenWA(null, $backend->executor())
+        (new OpenWA(null, $backend->executor()))
             ->sendMessage(['destination' => '0811', 'message' => 'a']);
 
         self::assertSame(
@@ -227,7 +227,7 @@ final class OpenWATest extends TestCase
 
         $backend = new MockBackend([MockBackend::json(['messageId' => 'x'])]);
 
-        new OpenWA(null, $backend->executor())
+        (new OpenWA(null, $backend->executor()))
             ->sendMessage(['destination' => '0811', 'message' => 'a']);
 
         self::assertSame(
