@@ -675,7 +675,7 @@ Kalau hanya memakai satu gateway, SDK ini berlebihan. Gunakan langsung
 [SDK PHP OpenWA](https://github.com/rmyndharis/OpenWA/tree/main/sdk/php)
 yang sudah teruji.
 
-## Rencana pengembangan
+## Feature
 
 - [x] Check Session
 - [x] Create sessions
@@ -685,6 +685,11 @@ yang sudah teruji.
 - [x] Send Media Image
 - [x] Send Media File
 - [x] Human Being Typing (`sendTyping()` eksplisit dan otomatis lewat `WHATSAPP_TYPING`)
+
+## Rencana Pengembangan
+
+- [ ] Menambahkan Gateway [Baileys API](https://github.com/rsuppersahabatan/baileys-api)
+- [ ] Menambahkan Gateway [Wwebjs API](https://github.com/avoylenko/wwebjs-api)
 
 ## Kredit
 
