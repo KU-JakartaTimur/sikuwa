@@ -234,6 +234,10 @@ final class Fonnte extends AbstractProvider
      * `status`. Karena itu respons 2xx dengan `status` kosong tetap dilaporkan
      * sebagai kegagalan.
      *
+     * Jeda antar pesan diserahkan ke server lewat kolom `delay` tiap pesan;
+     * bila pemanggil tidak mengisinya, nilainya diambil dari pacing
+     * (`WHATSAPP_PACING_*`), lalu jatuh ke bawaan 2 detik.
+     *
      * @param array<string,mixed>|array<int,array<string,mixed>>|string $message
      *
      * @return string `"Sukses: <detail>"` atau `"Sukses"` — awalan `Sukses`
@@ -244,13 +248,16 @@ final class Fonnte extends AbstractProvider
      */
     public function sendMessage(array|string $message): string
     {
-        $items = $this->parse($message);
+        $plan = $this->plan($message);
+        $items = $plan['items'];
 
         if ($items === []) {
             return 'Tidak ada pesan untuk dikirim';
         }
 
-        $payload = $this->compose(fn (): string => (new FonnteBulkMessage($items))->toJson());
+        $pacing = $this->pacing($plan['pacing']);
+
+        $payload = $this->compose(fn (): string => (new FonnteBulkMessage($items, $pacing))->toJson());
 
         $response = $this->http->post(
             $this->urlApi,

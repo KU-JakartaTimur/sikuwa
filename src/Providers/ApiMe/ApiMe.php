@@ -140,9 +140,10 @@ final class ApiMe extends AbstractProvider
      * Kirim pesan lewat ApiMe.
      *
      * ApiMe tidak punya endpoint batch, jadi beberapa pesan dikirim satu per
-     * satu secara berurutan. Jeda antar pesan dihormati lewat kunci `delay`,
-     * sehingga mengirim banyak pesan akan MEMBLOKIR pemanggil selama total
-     * jeda tersebut. Pemakaian di halaman scan hanya mengirim satu pesan.
+     * satu secara berurutan. Jeda antar pesan dihormati lewat kunci `delay`
+     * atau, bila tidak diisi, lewat pacing (`WHATSAPP_PACING_*`), sehingga
+     * mengirim banyak pesan akan MEMBLOKIR pemanggil selama total jeda
+     * tersebut. Pemakaian di halaman scan hanya mengirim satu pesan.
      *
      * @param array<string,mixed>|array<int,array<string,mixed>>|string $message
      *
@@ -151,7 +152,8 @@ final class ApiMe extends AbstractProvider
      */
     public function sendMessage(array|string $message): string
     {
-        $items = $this->parse($message);
+        $plan = $this->plan($message);
+        $items = $plan['items'];
 
         if ($items === []) {
             return 'Tidak ada pesan untuk dikirim';
@@ -168,13 +170,14 @@ final class ApiMe extends AbstractProvider
             : $this->sendSequentially(
                 $prepared,
                 fn (ApiMeMessage $message): string => $this->sendText($message),
-                static fn (ApiMeMessage $message): string => $message->to
+                static fn (ApiMeMessage $message): string => $message->to,
+                $this->pacing($plan['pacing'])
             );
     }
 
     /**
      * @param array<int,array{destination:string,message:string,delay:?int}> $items
-     * @return array<int,array{message:ApiMeMessage,delay:int}>
+     * @return array<int,array{message:ApiMeMessage,delay:?int}>
      *
      * @throws ConfigurationException
      */
@@ -189,7 +192,9 @@ final class ApiMe extends AbstractProvider
                 throw new ConfigurationException("Pesan ke-{$i} tidak punya nomor tujuan yang valid");
             }
 
-            $prepared[] = ['message' => $message, 'delay' => $item['delay'] ?? 0];
+            // `delay` dibiarkan null supaya sendSequentially() bisa mengisinya
+            // dari pacing; angka 0 tetap berarti "tanpa jeda".
+            $prepared[] = ['message' => $message, 'delay' => $item['delay']];
         }
 
         return $prepared;

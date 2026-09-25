@@ -13,6 +13,7 @@ use Sikuwa\Whatsapp\Exceptions\WhatsappException;
 use Sikuwa\Whatsapp\Http\HttpExecutor;
 use Sikuwa\Whatsapp\Http\HttpResponse;
 use Sikuwa\Whatsapp\Session;
+use Sikuwa\Whatsapp\Support\Pacing;
 
 /**
  * Bagian yang sama pada semua gateway: pemegang konfigurasi, penyunting bentuk
@@ -25,6 +26,13 @@ abstract class AbstractProvider implements Whatsapp
 {
     protected Config $config;
     protected HttpExecutor $http;
+
+    /**
+     * Penidur pengganti, dipakai test supaya jeda tidak benar-benar ditunggu.
+     *
+     * @var (callable(int):void)|null
+     */
+    private static $sleeper = null;
 
     /**
      * @param array{
@@ -99,24 +107,92 @@ abstract class AbstractProvider implements Whatsapp
     }
 
     /**
-     * Normalisasi bentuk pesan menjadi list yang seragam.
+     * Pasang penidur sendiri. Kirim null untuk kembali ke `sleep()` biasa.
+     *
+     * Ada supaya jeda antar pesan bisa diuji tanpa benar-benar menunggu —
+     * sama seperti {@see Config::useResolver()} yang jadi jalur test untuk
+     * environment. Hanya dipakai test.
+     *
+     * @param (callable(int):void)|null $sleeper
+     */
+    public static function useSleeper(?callable $sleeper): void
+    {
+        self::$sleeper = $sleeper;
+    }
+
+    /** Tunggu `$seconds` detik, lewat penidur yang sedang terpasang. */
+    protected function pause(int $seconds): void
+    {
+        if (self::$sleeper !== null) {
+            (self::$sleeper)($seconds);
+
+            return;
+        }
+
+        sleep($seconds);
+    }
+
+    /**
+     * Pacing yang berlaku untuk satu panggilan pengiriman.
+     *
+     * @param array<string,mixed>|null $override Opsi `pacing` dari pemanggil;
+     *                                           digabung sebagian atas nilai
+     *                                           dari konfigurasi.
+     */
+    protected function pacing(?array $override = null): Pacing
+    {
+        return $this->config->pacing()->merge($override);
+    }
+
+    /**
+     * Normalisasi bentuk pesan menjadi list yang seragam, sekaligus memisahkan
+     * pengaturan pacing dari isi pesan.
      *
      * `delay` dibiarkan null bila pemanggil tidak mengisinya, supaya tiap
      * gateway bisa memakai nilai bawaannya sendiri (Fonnte 2 detik, OpenWA 3
-     * detik, sisanya 0). Mengisinya dengan 0 berarti "tanpa jeda".
+     * detik, sisanya 0) atau nilai dari pacing. Mengisinya dengan 0 berarti
+     * "tanpa jeda" — dan itu tetap menang atas pacing, karena pemanggil yang
+     * menyebut angka pasti lebih tahu daripada nilai bawaan.
      *
      * @param array<string,mixed>|array<int,array<string,mixed>>|string $message
-     * @return array<int,array{destination:string,message:string,delay:?int}>
+     * @return array{
+     *     items:array<int,array{destination:string,message:string,delay:?int}>,
+     *     pacing:array<string,mixed>|null
+     * }
      *
      * @throws ConfigurationException
      */
-    protected function parse(array|string $message): array
+    protected function plan(array|string $message): array
     {
         if (\is_string($message)) {
             throw new ConfigurationException(
                 'Format pesan tidak valid: ' . $this->getProvider() . ' membutuhkan array pesan'
             );
         }
+
+        // Pacing per panggilan. Dua bentuk diterima, karena daftar pesan polos
+        // tidak punya tempat untuk menaruh kunci pengaturan:
+        //   ['messages' => [...], 'pacing' => [...]]   (amplop)
+        //   ['pacing' => [...], [...], [...]]          (kunci di samping daftar)
+        $override = null;
+
+        if (array_key_exists('pacing', $message) && $message['pacing'] !== null) {
+            if (! \is_array($message['pacing'])) {
+                throw new ConfigurationException(
+                    "Gagal menyusun pesan: kunci 'pacing' harus berupa array, "
+                    . "mis. ['cycle' => '0,30', 'interval' => '20-30']"
+                );
+            }
+
+            $override = $message['pacing'];
+        }
+
+        if (isset($message['messages']) && \is_array($message['messages'])) {
+            $message = $message['messages'];
+        }
+
+        // Dibuang supaya tidak ikut terbaca sebagai pesan pada bentuk daftar.
+        unset($message['pacing']);
 
         // Bulk kalau elemen pertama sendiri berupa array pesan.
         $isBulk = isset($message[0]) && \is_array($message[0]);
@@ -137,7 +213,7 @@ abstract class AbstractProvider implements Whatsapp
             ];
         }
 
-        return $items;
+        return ['items' => $items, 'pacing' => $override];
     }
 
     /**
@@ -295,21 +371,32 @@ abstract class AbstractProvider implements Whatsapp
      * Jeda dihormati dengan `sleep()`, jadi mengirim banyak pesan akan
      * MEMBLOKIR pemanggil selama total jeda tersebut.
      *
-     * @param array<int,array{message:mixed,delay:int}> $items
+     * Urutan penentuan jeda: `delay` pada pesan itu sendiri, lalu pacing, lalu
+     * nol. Pesan pertama tidak pernah ditunggu — jeda sebelum pengiriman
+     * pertama adalah urusan pemanggil, bukan urusan SDK.
+     *
+     * @param array<int,array{message:mixed,delay:?int}> $items
      * @param callable(mixed):void                      $send
      * @param callable(mixed):string                    $label Penanda pesan untuk pesan error.
+     * @param Pacing|null $pacing Pengatur jeda antar pesan; null berarti tidak ada.
      *
      * @throws ApiException
      */
-    protected function sendSequentially(array $items, callable $send, callable $label): string
-    {
+    protected function sendSequentially(
+        array $items,
+        callable $send,
+        callable $label,
+        ?Pacing $pacing = null
+    ): string {
         $sukses = 0;
         $gagal = [];
         $terakhir = null;
 
         foreach ($items as $i => $item) {
-            if ($i > 0 && $item['delay'] > 0) {
-                sleep($item['delay']);
+            $jeda = $item['delay'] ?? $pacing?->delayFor($i) ?? 0;
+
+            if ($i > 0 && $jeda > 0) {
+                $this->pause($jeda);
             }
 
             try {

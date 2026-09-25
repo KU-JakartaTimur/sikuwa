@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Sikuwa\Whatsapp;
 
+use Sikuwa\Whatsapp\Support\Pacing;
+
 /**
  * Sumber konfigurasi tunggal untuk seluruh provider.
  *
@@ -19,7 +21,8 @@ namespace Sikuwa\Whatsapp;
  * Kunci yang dikenali: `WA_NOTIFICATION`, `WHATSAPP_PROVIDER`,
  * `WHATSAPP_TOKEN`, `WHATSAPP_TOKEN_<Provider>`, `WHATSAPP_URL`,
  * `WHATSAPP_URL_<Provider>`, `WHATSAPP_SESSION`, `WHATSAPP_INSTANCE`,
- * `WHATSAPP_ACCOUNT_TOKEN`, `WHATSAPP_TIMEOUT`.
+ * `WHATSAPP_ACCOUNT_TOKEN`, `WHATSAPP_TIMEOUT`, `WHATSAPP_PACING_CYCLE`,
+ * `WHATSAPP_PACING_INTERVAL`.
  */
 final class Config
 {
@@ -39,6 +42,8 @@ final class Config
      *                                   Menang atas `WHATSAPP_URL_<Provider>`.
      * @param string|null $accountToken Token akun, khusus Fonnte Device API —
      *                                  lihat {@see self::accountToken()}.
+     * @param Pacing|null $pacing Pengatur jeda antar pesan saat mengirim
+     *                            beruntun — lihat {@see self::pacing()}.
      */
     public function __construct(
         private ?string $token = null,
@@ -50,7 +55,8 @@ final class Config
         private ?string $provider = null,
         private array $headers = [],
         private array $urls = [],
-        private ?string $accountToken = null
+        private ?string $accountToken = null,
+        private ?Pacing $pacing = null
     ) {
     }
 
@@ -61,7 +67,8 @@ final class Config
      *     token?:string, url?:string, session?:string, instance?:string,
      *     timeout?:int|float, tokens?:array<string,string>, provider?:string,
      *     headers?:array<string,string>, urls?:array<string,string>,
-     *     account_token?:string
+     *     account_token?:string,
+     *     pacing?:array{cycle?:string|array<int,mixed>,interval?:string|int|array<int,mixed>}|Pacing
      * }|Config|null $options
      */
     public static function from(array|Config|null $options): self
@@ -85,6 +92,7 @@ final class Config
             headers: $options['headers'] ?? [],
             urls: $options['urls'] ?? [],
             accountToken: $options['account_token'] ?? null,
+            pacing: self::pacingOption($options['pacing'] ?? null),
         );
     }
 
@@ -99,7 +107,26 @@ final class Config
             timeout: self::env('WHATSAPP_TIMEOUT') === null ? null : (float) self::env('WHATSAPP_TIMEOUT'),
             provider: self::env('WHATSAPP_PROVIDER'),
             accountToken: self::env('WHATSAPP_ACCOUNT_TOKEN'),
+            pacing: Pacing::fromConfig(
+                self::env('WHATSAPP_PACING_CYCLE'),
+                self::env('WHATSAPP_PACING_INTERVAL')
+            ),
         );
+    }
+
+    /**
+     * Terima opsi `pacing` dalam bentuk objek jadi maupun array mentah.
+     *
+     * @return Pacing|null Null bila pemanggil tidak mengirim apa pun, supaya
+     *                     {@see self::pacing()} masih bisa jatuh ke environment.
+     */
+    private static function pacingOption(mixed $value): ?Pacing
+    {
+        if ($value instanceof Pacing) {
+            return $value;
+        }
+
+        return \is_array($value) ? Pacing::fromArray($value) : null;
     }
 
     /**
@@ -234,6 +261,26 @@ final class Config
     public function accountToken(): string
     {
         return $this->accountToken ?? self::env('WHATSAPP_ACCOUNT_TOKEN') ?? '';
+    }
+
+    /**
+     * Pengatur jeda antar pesan saat mengirim beruntun.
+     *
+     * Berbeda dari kunci lain di kelas ini, bawaannya adalah **mati**: selama
+     * `WHATSAPP_PACING_CYCLE` dan `WHATSAPP_PACING_INTERVAL` kosong, jeda
+     * diserahkan sepenuhnya ke tiap gateway seperti sebelum fitur ini ada.
+     * Pacing yang aktif tapi salah nilainya akan menahan proses pemanggil
+     * selama berjam-jam, jadi ia harus dinyalakan dengan sengaja.
+     *
+     * Nilai eksplisit di konstruktor menang utuh atas environment — tidak
+     * digabung sebagian, sama seperti `token` dan `url`.
+     */
+    public function pacing(): Pacing
+    {
+        return $this->pacing ?? Pacing::fromConfig(
+            self::env('WHATSAPP_PACING_CYCLE'),
+            self::env('WHATSAPP_PACING_INTERVAL')
+        );
     }
 
     /**

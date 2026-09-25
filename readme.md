@@ -107,8 +107,60 @@ Nomor boleh ditulis dalam format apa pun yang lazim di Indonesia
 
 `delay` dihitung dalam **detik** dan opsional: jeda sebelum pesan dikirim
 (Fonnte, Evolution API) atau jeda antar pesan pada pengiriman berurutan. Bila
-tidak diisi, tiap gateway memakai bawaannya sendiri — Fonnte 2 detik, OpenWA 3
-detik, sisanya tanpa jeda.
+tidak diisi, nilainya diambil dari [pacing](#jeda-antar-pesan-pacing); kalau
+pacing pun mati, tiap gateway memakai bawaannya sendiri — Fonnte 2 detik, OpenWA
+3 detik, sisanya tanpa jeda.
+
+### Jeda antar pesan (pacing)
+
+Mengirim beruntun dengan jeda yang seragam mudah dikenali sebagai robot. Pacing
+menyusun jeda dari dua bagian, dan keduanya bisa dipakai sendiri-sendiri maupun
+bersamaan:
+
+| Kunci | Arti |
+| --- | --- |
+| `WHATSAPP_PACING_CYCLE` | Daftar jeda tetap yang dipakai **bergiliran**, detik. `0,30` berarti pesan ke-1 tanpa jeda, ke-2 jeda 30 detik, ke-3 tanpa jeda, dan seterusnya |
+| `WHATSAPP_PACING_INTERVAL` | Jitter acak yang **ditambahkan** ke tiap jeda siklus, detik. `20-30` berarti setiap jeda ditambah 20–30 detik acak |
+
+Jadi jeda sebelum pesan ke-`i` adalah `siklus[i % jumlah siklus] + jitter`.
+Dengan keduanya diisi seperti contoh di atas, jedanya berurutan 20–30, 50–60,
+20–30, 50–60, … detik.
+
+Bawaannya **mati**: selama kedua kunci kosong, tiap gateway memakai jeda
+bawaannya sendiri seperti sebelumnya. Ini disengaja — mengirim banyak pesan
+menahan proses pemanggil selama total jeda itu, jadi pacing harus dinyalakan
+dengan sadar.
+
+Untuk satu panggilan saja, sertakan kuncinya bersama pesan. Yang disebutkan saja
+yang ditimpa; sisanya tetap diambil dari `.env`:
+
+```php
+$client->send([
+    'messages' => [
+        ['destination' => '0811111111', 'message' => 'Pesan pertama'],
+        ['destination' => '0822222222', 'message' => 'Pesan kedua'],
+    ],
+    'pacing' => ['cycle' => '0,45', 'interval' => '10-20'],
+]);
+```
+
+`delay` pada satu pesan tetap menang atas pacing untuk pesan itu — termasuk
+`'delay' => 0`, yang berarti "pesan ini tanpa jeda". Pesan pertama tidak pernah
+ditunggu: jeda sebelum pengiriman pertama adalah urusan pemanggil, bukan SDK.
+
+Siapa yang benar-benar mengerjakan jedanya berbeda per gateway, dan itu memang
+sifat gateway-nya:
+
+| Gateway | Jeda dikerjakan oleh |
+| --- | --- |
+| Fonnte | Server, lewat kolom `delay` tiap pesan |
+| OpenWA | Server, lewat `delayBetweenMessages` — satu angka untuk seluruh batch, diambil dari jeda sebelum pesan kedua |
+| Evolution API | Server, lewat kolom `delay` payload (dalam milidetik) |
+| ApiMe, Wuzapi | SDK, dengan `sleep()` di antara request |
+
+Karena jedanya dititipkan ke server, Fonnte, OpenWA, dan Evolution API tidak
+menahan klien dua kali. OpenWA juga menambahkan pengacakan di sisinya sendiri
+(`randomizeDelay`).
 
 ### Dua gaya pemanggilan
 
@@ -308,6 +360,8 @@ Lihat [`.env.example`](.env.example). Ringkasnya:
 | `WHATSAPP_INSTANCE` | Khusus ApiMe dan Evolution API. Juga nama bawaan `createSession()` |
 | `WHATSAPP_ACCOUNT_TOKEN` | Khusus Fonnte Device API (`add-device`, `get-devices`). Bukan token perangkat |
 | `WHATSAPP_TIMEOUT` | Batas waktu request, detik (1–60, default 10) |
+| `WHATSAPP_PACING_CYCLE` | Jeda tetap yang dipakai bergiliran antar pesan, detik. Mis. `0,30`. Kosong = pacing mati |
+| `WHATSAPP_PACING_INTERVAL` | Jitter acak yang ditambahkan ke tiap jeda siklus, detik. Mis. `20-30` |
 
 ### URL per gateway
 
@@ -351,7 +405,8 @@ Fonnte punya endpoint tetap sendiri.
   `Idempotency-Key` deterministik, sehingga kartu yang ter-scan dua kali
   beruntun tidak menghasilkan dua pesan.
 - **Evolution API** — butuh `WHATSAPP_INSTANCE`. `delay` dititipkan ke server
-  lewat payload (dalam milidetik), jadi klien tidak ikut menunggu.
+  lewat payload (dalam milidetik), jadi klien tidak ikut menunggu. Nilainya
+  diambil dari `delay` pesan, atau dari pacing bila tidak diisi.
 - **Wuzapi** — tidak butuh instance: tokennya sendiri yang menentukan sesi.
   Auth memakai header `Token`, bukan `Authorization` seperti yang tertulis di
   README wuzapi.
@@ -408,9 +463,10 @@ yang sudah teruji.
 - [x] Create sessions
 - [x] Show QR
 - [x] Send messages
+- [x] Jeda antar pesan (pacing)
 - [ ] Send Media Image
 - [ ] Send Media File
-- [ ] Human Being Typing
+- [x] Human Being Typing
 
 ## Kredit
 

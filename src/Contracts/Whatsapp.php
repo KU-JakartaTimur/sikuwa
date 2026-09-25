@@ -18,7 +18,9 @@ use Sikuwa\Whatsapp\Session;
  *
  * `delay` opsional dan dihitung dalam detik; artinya jeda sebelum pesan
  * dikirim (Fonnte dan Evolution API) atau jeda antar pesan pada pengiriman
- * berurutan.
+ * berurutan. Bila tidak diisi, jedanya diambil dari pacing
+ * (`WHATSAPP_PACING_CYCLE` / `WHATSAPP_PACING_INTERVAL`), lalu dari bawaan
+ * gateway.
  *
  * Sesi WhatsApp juga seragam: {@see self::createSession()},
  * {@see self::checkSession()}, dan {@see self::showQr()} selalu mengembalikan
@@ -34,6 +36,9 @@ interface Whatsapp
      * @param array<string,mixed>|array<int,array<string,mixed>>|string $message
      *        Satu pesan `['destination' => ..., 'message' => ..., 'delay' => ...]`,
      *        atau list dari array seperti itu untuk pengiriman massal.
+     *        Jeda antar pesan diatur pacing; untuk menimpanya pada satu
+     *        panggilan saja, bungkus list-nya —
+     *        `['messages' => [...], 'pacing' => ['cycle' => '0,30']]`.
      *
      * @return string Detail hasil yang siap dicatat ke log. Setiap provider
      *                mengawalinya dengan `"Sukses"` supaya pemanggil bisa

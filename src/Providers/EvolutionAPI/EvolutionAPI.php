@@ -10,6 +10,7 @@ use Sikuwa\Whatsapp\Exceptions\ConfigurationException;
 use Sikuwa\Whatsapp\Http\HttpExecutor;
 use Sikuwa\Whatsapp\Providers\AbstractProvider;
 use Sikuwa\Whatsapp\Session;
+use Sikuwa\Whatsapp\Support\Pacing;
 
 /**
  * Gateway Evolution API (https://github.com/evolution-foundation/evolution-api),
@@ -136,7 +137,9 @@ final class EvolutionAPI extends AbstractProvider
      * Evolution tidak punya endpoint batch, jadi beberapa pesan dikirim satu
      * per satu. Jeda antar pesan diserahkan ke server lewat kolom `delay`
      * (Evolution menunggu sebelum mengirim), sehingga pemanggil tetap
-     * menunggu selama jeda itu. Halaman scan hanya mengirim satu pesan.
+     * menunggu selama jeda itu. Bila `delay` tidak diisi, nilainya diambil
+     * dari pacing (`WHATSAPP_PACING_*`). Halaman scan hanya mengirim satu
+     * pesan.
      *
      * @param array<string,mixed>|array<int,array<string,mixed>>|string $message
      *
@@ -145,7 +148,8 @@ final class EvolutionAPI extends AbstractProvider
      */
     public function sendMessage(array|string $message): string
     {
-        $items = $this->parse($message);
+        $plan = $this->plan($message);
+        $items = $plan['items'];
 
         if ($items === []) {
             return 'Tidak ada pesan untuk dikirim';
@@ -155,8 +159,11 @@ final class EvolutionAPI extends AbstractProvider
             throw new ConfigurationException('WHATSAPP_INSTANCE belum diisi di .env');
         }
 
-        $prepared = $this->compose(fn (): array => $this->build($items));
+        $pacing = $this->pacing($plan['pacing']);
+        $prepared = $this->compose(fn (): array => $this->build($items, $pacing));
 
+        // Pacing sengaja tidak diteruskan ke sendSequentially(): jedanya sudah
+        // dititipkan ke server, jadi menunggu di klien juga berarti dua kali.
         return \count($prepared) === 1
             ? $this->sendText($prepared[0]['message'])
             : $this->sendSequentially(
@@ -168,11 +175,11 @@ final class EvolutionAPI extends AbstractProvider
 
     /**
      * @param array<int,array{destination:string,message:string,delay:?int}> $items
-     * @return array<int,array{message:EvolutionAPIMessage,delay:int}>
+     * @return array<int,array{message:EvolutionAPIMessage,delay:?int}>
      *
      * @throws ConfigurationException
      */
-    private function build(array $items): array
+    private function build(array $items, Pacing $pacing): array
     {
         $prepared = [];
 
@@ -180,7 +187,7 @@ final class EvolutionAPI extends AbstractProvider
             $message = new EvolutionAPIMessage(
                 $item['destination'],
                 $item['message'],
-                $item['delay'] ?? 0
+                $item['delay'] ?? $pacing->delayFor($i) ?? 0
             );
 
             if ($message->number === '') {

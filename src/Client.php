@@ -157,6 +157,20 @@ final class Client
     /**
      * Kirim pesan dan lempar exception bila gagal.
      *
+     * Jeda antar pesan pada pengiriman massal diatur lewat
+     * `WHATSAPP_PACING_CYCLE` / `WHATSAPP_PACING_INTERVAL`; untuk menimpanya
+     * pada satu panggilan saja, bungkus list-nya bersama kunci `pacing`:
+     *
+     * ```php
+     * $client->send([
+     *     'messages' => [
+     *         ['destination' => '0811111111', 'message' => 'Pesan pertama'],
+     *         ['destination' => '0822222222', 'message' => 'Pesan kedua'],
+     *     ],
+     *     'pacing' => ['cycle' => '0,45', 'interval' => '10-20'],
+     * ]);
+     * ```
+     *
      * @param array<string,mixed>|array<int,array<string,mixed>>|string $message
      *
      * @throws WhatsappException
