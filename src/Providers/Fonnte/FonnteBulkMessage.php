@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Sikuwa\Whatsapp\Providers\Fonnte;
 
 use Sikuwa\Whatsapp\Exceptions\ConfigurationException;
-use Sikuwa\Whatsapp\Support\Pacing;
 
 /**
  * Kumpulan pesan untuk satu request Fonnte.
@@ -20,11 +19,13 @@ final class FonnteBulkMessage
 
     /**
      * @param array<int,array{destination:string,message:string,delay:?int}> $messages
-     * @param Pacing|null $pacing Dipakai untuk pesan yang `delay`-nya tidak diisi.
+     *        `delay` sudah diselesaikan
+     *        {@see \Sikuwa\Whatsapp\Providers\AbstractProvider::plan()},
+     *        termasuk bagian pacing-nya.
      *
      * @throws ConfigurationException
      */
-    public function __construct(array $messages, private readonly ?Pacing $pacing = null)
+    public function __construct(array $messages)
     {
         foreach ($messages as $i => $message) {
             if (! isset($message['destination'], $message['message'])) {
@@ -36,7 +37,7 @@ final class FonnteBulkMessage
             $this->messageWhatsapp[] = (new FonnteMessage(
                 (string) $message['destination'],
                 (string) $message['message'],
-                $message['delay'] ?? $this->pacing?->delayFor($i) ?? FonnteMessage::DEFAULT_DELAY
+                $message['delay'] ?? FonnteMessage::DEFAULT_DELAY
             ))->toArray();
         }
     }

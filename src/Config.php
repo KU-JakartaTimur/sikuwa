@@ -22,7 +22,8 @@ use Sikuwa\Whatsapp\Support\Pacing;
  * `WHATSAPP_TOKEN`, `WHATSAPP_TOKEN_<Provider>`, `WHATSAPP_URL`,
  * `WHATSAPP_URL_<Provider>`, `WHATSAPP_SESSION`, `WHATSAPP_INSTANCE`,
  * `WHATSAPP_ACCOUNT_TOKEN`, `WHATSAPP_TIMEOUT`, `WHATSAPP_PACING_CYCLE`,
- * `WHATSAPP_PACING_INTERVAL`.
+ * `WHATSAPP_PACING_INTERVAL`, `WHATSAPP_PACING_LONG_CHARS`,
+ * `WHATSAPP_PACING_LONG_FACTOR`.
  */
 final class Config
 {
@@ -68,7 +69,12 @@ final class Config
      *     timeout?:int|float, tokens?:array<string,string>, provider?:string,
      *     headers?:array<string,string>, urls?:array<string,string>,
      *     account_token?:string,
-     *     pacing?:array{cycle?:string|array<int,mixed>,interval?:string|int|array<int,mixed>}|Pacing
+     *     pacing?:array{
+     *         cycle?:string|array<int,mixed>,
+     *         interval?:string|int|array<int,mixed>,
+     *         long_chars?:string|int,
+     *         long_factor?:string|int
+     *     }|Pacing
      * }|Config|null $options
      */
     public static function from(array|Config|null $options): self
@@ -107,10 +113,24 @@ final class Config
             timeout: self::env('WHATSAPP_TIMEOUT') === null ? null : (float) self::env('WHATSAPP_TIMEOUT'),
             provider: self::env('WHATSAPP_PROVIDER'),
             accountToken: self::env('WHATSAPP_ACCOUNT_TOKEN'),
-            pacing: Pacing::fromConfig(
-                self::env('WHATSAPP_PACING_CYCLE'),
-                self::env('WHATSAPP_PACING_INTERVAL')
-            ),
+            pacing: self::pacingFromEnv(),
+        );
+    }
+
+    /**
+     * Pacing dari environment.
+     *
+     * Dikumpulkan di satu tempat supaya dua jalur yang memakainya —
+     * {@see self::fromEnvironment()} dan {@see self::pacing()} — tidak bisa
+     * berbeda diam-diam saat kuncinya bertambah.
+     */
+    private static function pacingFromEnv(): Pacing
+    {
+        return Pacing::fromConfig(
+            self::env('WHATSAPP_PACING_CYCLE'),
+            self::env('WHATSAPP_PACING_INTERVAL'),
+            self::env('WHATSAPP_PACING_LONG_CHARS'),
+            self::env('WHATSAPP_PACING_LONG_FACTOR')
         );
     }
 
@@ -277,10 +297,7 @@ final class Config
      */
     public function pacing(): Pacing
     {
-        return $this->pacing ?? Pacing::fromConfig(
-            self::env('WHATSAPP_PACING_CYCLE'),
-            self::env('WHATSAPP_PACING_INTERVAL')
-        );
+        return $this->pacing ?? self::pacingFromEnv();
     }
 
     /**

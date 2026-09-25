@@ -157,8 +157,8 @@ final class Client
     /**
      * Kirim pesan dan lempar exception bila gagal.
      *
-     * Jeda antar pesan pada pengiriman massal diatur lewat
-     * `WHATSAPP_PACING_CYCLE` / `WHATSAPP_PACING_INTERVAL`; untuk menimpanya
+     * Jeda antar pesan pada pengiriman massal diatur lewat `WHATSAPP_PACING_*`
+     * (siklus, jitter acak, dan pengali untuk pesan panjang); untuk menimpanya
      * pada satu panggilan saja, bungkus list-nya bersama kunci `pacing`:
      *
      * ```php

@@ -13,7 +13,7 @@ use Sikuwa\Whatsapp\Exceptions\WhatsappException;
 use Sikuwa\Whatsapp\Http\HttpExecutor;
 use Sikuwa\Whatsapp\Http\HttpResponse;
 use Sikuwa\Whatsapp\Session;
-use Sikuwa\Whatsapp\Support\Pacing;
+use Sikuwa\Whatsapp\Support\Text;
 
 /**
  * Bagian yang sama pada semua gateway: pemegang konfigurasi, penyunting bentuk
@@ -133,32 +133,23 @@ abstract class AbstractProvider implements Whatsapp
     }
 
     /**
-     * Pacing yang berlaku untuk satu panggilan pengiriman.
+     * Normalisasi bentuk pesan menjadi list yang seragam, sekaligus
+     * menyelesaikan jeda tiap pesan.
      *
-     * @param array<string,mixed>|null $override Opsi `pacing` dari pemanggil;
-     *                                           digabung sebagian atas nilai
-     *                                           dari konfigurasi.
-     */
-    protected function pacing(?array $override = null): Pacing
-    {
-        return $this->config->pacing()->merge($override);
-    }
-
-    /**
-     * Normalisasi bentuk pesan menjadi list yang seragam, sekaligus memisahkan
-     * pengaturan pacing dari isi pesan.
+     * Pacing diselesaikan **di sini**, bukan di jalur kirim: hanya di titik ini
+     * isi pesan masih berupa teks, dan panjangnya ikut menentukan jeda — pesan
+     * panjang ditunggu lebih lama. Kalau jedanya baru dihitung di
+     * `sendSequentially()` atau di DTO tiap gateway, panjang pesan sudah
+     * berubah bentuk menjadi objek dan aturannya harus diulang lima kali.
      *
-     * `delay` dibiarkan null bila pemanggil tidak mengisinya, supaya tiap
-     * gateway bisa memakai nilai bawaannya sendiri (Fonnte 2 detik, OpenWA 3
-     * detik, sisanya 0) atau nilai dari pacing. Mengisinya dengan 0 berarti
-     * "tanpa jeda" — dan itu tetap menang atas pacing, karena pemanggil yang
+     * `delay` tetap boleh null: itu berarti pacing sedang mati, dan gateway
+     * yang memutuskan nilai bawaannya sendiri (Fonnte 2 detik, OpenWA 3 detik,
+     * sisanya 0). Mengisinya dengan 0 berarti "tanpa jeda" — dan angka yang
+     * disebut pemanggil selalu menang atas pacing, karena pemanggil yang
      * menyebut angka pasti lebih tahu daripada nilai bawaan.
      *
      * @param array<string,mixed>|array<int,array<string,mixed>>|string $message
-     * @return array{
-     *     items:array<int,array{destination:string,message:string,delay:?int}>,
-     *     pacing:array<string,mixed>|null
-     * }
+     * @return array<int,array{destination:string,message:string,delay:?int}>
      *
      * @throws ConfigurationException
      */
@@ -194,6 +185,8 @@ abstract class AbstractProvider implements Whatsapp
         // Dibuang supaya tidak ikut terbaca sebagai pesan pada bentuk daftar.
         unset($message['pacing']);
 
+        $pacing = $this->config->pacing()->merge($override);
+
         // Bulk kalau elemen pertama sendiri berupa array pesan.
         $isBulk = isset($message[0]) && \is_array($message[0]);
         $messages = $isBulk ? $message : [$message];
@@ -206,14 +199,20 @@ abstract class AbstractProvider implements Whatsapp
                 );
             }
 
+            $text = (string) $item['message'];
+
             $items[] = [
                 'destination' => (string) $item['destination'],
-                'message' => (string) $item['message'],
-                'delay' => isset($item['delay']) ? max(0, (int) $item['delay']) : null,
+                'message' => $text,
+                // Urutan siklus mengikuti posisi di daftar, bukan kunci asli
+                // pemanggil — daftar bisa datang dengan kunci yang bolong.
+                'delay' => isset($item['delay'])
+                    ? max(0, (int) $item['delay'])
+                    : $pacing->delayFor(\count($items), Text::length($text)),
             ];
         }
 
-        return ['items' => $items, 'pacing' => $override];
+        return $items;
     }
 
     /**
@@ -371,29 +370,25 @@ abstract class AbstractProvider implements Whatsapp
      * Jeda dihormati dengan `sleep()`, jadi mengirim banyak pesan akan
      * MEMBLOKIR pemanggil selama total jeda tersebut.
      *
-     * Urutan penentuan jeda: `delay` pada pesan itu sendiri, lalu pacing, lalu
-     * nol. Pesan pertama tidak pernah ditunggu — jeda sebelum pengiriman
-     * pertama adalah urusan pemanggil, bukan urusan SDK.
+     * Jedanya sudah diselesaikan {@see self::plan()} — termasuk bagian pacing
+     * yang bergantung pada panjang isi pesan. Di sini tinggal menjalankannya.
+     * Pesan pertama tidak pernah ditunggu: jeda sebelum pengiriman pertama
+     * adalah urusan pemanggil, bukan urusan SDK.
      *
      * @param array<int,array{message:mixed,delay:?int}> $items
      * @param callable(mixed):void                      $send
      * @param callable(mixed):string                    $label Penanda pesan untuk pesan error.
-     * @param Pacing|null $pacing Pengatur jeda antar pesan; null berarti tidak ada.
      *
      * @throws ApiException
      */
-    protected function sendSequentially(
-        array $items,
-        callable $send,
-        callable $label,
-        ?Pacing $pacing = null
-    ): string {
+    protected function sendSequentially(array $items, callable $send, callable $label): string
+    {
         $sukses = 0;
         $gagal = [];
         $terakhir = null;
 
         foreach ($items as $i => $item) {
-            $jeda = $item['delay'] ?? $pacing?->delayFor($i) ?? 0;
+            $jeda = (int) ($item['delay'] ?? 0);
 
             if ($i > 0 && $jeda > 0) {
                 $this->pause($jeda);

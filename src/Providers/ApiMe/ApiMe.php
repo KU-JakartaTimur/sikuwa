@@ -152,8 +152,7 @@ final class ApiMe extends AbstractProvider
      */
     public function sendMessage(array|string $message): string
     {
-        $plan = $this->plan($message);
-        $items = $plan['items'];
+        $items = $this->plan($message);
 
         if ($items === []) {
             return 'Tidak ada pesan untuk dikirim';
@@ -170,8 +169,7 @@ final class ApiMe extends AbstractProvider
             : $this->sendSequentially(
                 $prepared,
                 fn (ApiMeMessage $message): string => $this->sendText($message),
-                static fn (ApiMeMessage $message): string => $message->to,
-                $this->pacing($plan['pacing'])
+                static fn (ApiMeMessage $message): string => $message->to
             );
     }
 

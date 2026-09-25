@@ -147,8 +147,7 @@ final class Wuzapi extends AbstractProvider
      */
     public function sendMessage(array|string $message): string
     {
-        $plan = $this->plan($message);
-        $items = $plan['items'];
+        $items = $this->plan($message);
 
         if ($items === []) {
             return 'Tidak ada pesan untuk dikirim';
@@ -161,8 +160,7 @@ final class Wuzapi extends AbstractProvider
             : $this->sendSequentially(
                 $prepared,
                 fn (WuzapiMessage $m): string => $this->sendText($m),
-                static fn (WuzapiMessage $m): string => $m->phone,
-                $this->pacing($plan['pacing'])
+                static fn (WuzapiMessage $m): string => $m->phone
             );
     }
 

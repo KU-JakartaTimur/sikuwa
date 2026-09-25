@@ -18,9 +18,9 @@ use Sikuwa\Whatsapp\Session;
  *
  * `delay` opsional dan dihitung dalam detik; artinya jeda sebelum pesan
  * dikirim (Fonnte dan Evolution API) atau jeda antar pesan pada pengiriman
- * berurutan. Bila tidak diisi, jedanya diambil dari pacing
- * (`WHATSAPP_PACING_CYCLE` / `WHATSAPP_PACING_INTERVAL`), lalu dari bawaan
- * gateway.
+ * berurutan. Bila tidak diisi, jedanya diambil dari pacing (`WHATSAPP_PACING_*`)
+ * — termasuk bagian yang bergantung pada panjang isi pesan, karena pesan
+ * panjang ditunggu lebih lama — lalu dari bawaan gateway.
  *
  * Sesi WhatsApp juga seragam: {@see self::createSession()},
  * {@see self::checkSession()}, dan {@see self::showQr()} selalu mengembalikan

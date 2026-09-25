@@ -10,7 +10,6 @@ use Sikuwa\Whatsapp\Exceptions\ConfigurationException;
 use Sikuwa\Whatsapp\Http\HttpExecutor;
 use Sikuwa\Whatsapp\Providers\AbstractProvider;
 use Sikuwa\Whatsapp\Session;
-use Sikuwa\Whatsapp\Support\Pacing;
 
 /**
  * Gateway Evolution API (https://github.com/evolution-foundation/evolution-api),
@@ -148,8 +147,7 @@ final class EvolutionAPI extends AbstractProvider
      */
     public function sendMessage(array|string $message): string
     {
-        $plan = $this->plan($message);
-        $items = $plan['items'];
+        $items = $this->plan($message);
 
         if ($items === []) {
             return 'Tidak ada pesan untuk dikirim';
@@ -159,10 +157,9 @@ final class EvolutionAPI extends AbstractProvider
             throw new ConfigurationException('WHATSAPP_INSTANCE belum diisi di .env');
         }
 
-        $pacing = $this->pacing($plan['pacing']);
-        $prepared = $this->compose(fn (): array => $this->build($items, $pacing));
+        $prepared = $this->compose(fn (): array => $this->build($items));
 
-        // Pacing sengaja tidak diteruskan ke sendSequentially(): jedanya sudah
+        // Jeda sengaja tidak diteruskan ke sendSequentially(): nilainya sudah
         // dititipkan ke server, jadi menunggu di klien juga berarti dua kali.
         return \count($prepared) === 1
             ? $this->sendText($prepared[0]['message'])
@@ -179,7 +176,7 @@ final class EvolutionAPI extends AbstractProvider
      *
      * @throws ConfigurationException
      */
-    private function build(array $items, Pacing $pacing): array
+    private function build(array $items): array
     {
         $prepared = [];
 
@@ -187,7 +184,7 @@ final class EvolutionAPI extends AbstractProvider
             $message = new EvolutionAPIMessage(
                 $item['destination'],
                 $item['message'],
-                $item['delay'] ?? $pacing->delayFor($i) ?? 0
+                $item['delay'] ?? 0
             );
 
             if ($message->number === '') {

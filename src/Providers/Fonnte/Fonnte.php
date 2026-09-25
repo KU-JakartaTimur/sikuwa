@@ -248,16 +248,13 @@ final class Fonnte extends AbstractProvider
      */
     public function sendMessage(array|string $message): string
     {
-        $plan = $this->plan($message);
-        $items = $plan['items'];
+        $items = $this->plan($message);
 
         if ($items === []) {
             return 'Tidak ada pesan untuk dikirim';
         }
 
-        $pacing = $this->pacing($plan['pacing']);
-
-        $payload = $this->compose(fn (): string => (new FonnteBulkMessage($items, $pacing))->toJson());
+        $payload = $this->compose(fn (): string => (new FonnteBulkMessage($items))->toJson());
 
         $response = $this->http->post(
             $this->urlApi,

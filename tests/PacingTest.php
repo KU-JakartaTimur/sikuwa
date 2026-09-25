@@ -14,6 +14,7 @@ use Sikuwa\Whatsapp\Providers\Fonnte\Fonnte;
 use Sikuwa\Whatsapp\Providers\OpenWA\OpenWA;
 use Sikuwa\Whatsapp\Providers\Wuzapi\Wuzapi;
 use Sikuwa\Whatsapp\Support\Pacing;
+use Sikuwa\Whatsapp\Support\Text;
 
 /**
  * Jeda antar pesan: siklus yang bergiliran, jitter acak, dan penimpaan per
@@ -201,6 +202,93 @@ final class PacingTest extends TestCase
     }
 
     // ---------------------------------------------------------------------
+    // Pesan panjang
+    // ---------------------------------------------------------------------
+
+    public function testLongBodyMultipliesTheDelay(): void
+    {
+        $pacing = Pacing::fromConfig('0,30', null);
+
+        self::assertSame(Pacing::DEFAULT_LONG_CHARS, $pacing->longChars());
+        self::assertSame(Pacing::DEFAULT_LONG_FACTOR, $pacing->longFactor());
+
+        // Pesan pendek: siklus apa adanya.
+        self::assertSame(0, $pacing->delayFor(0, 100));
+        self::assertSame(30, $pacing->delayFor(1, 100));
+
+        // Pesan panjang: siklus dikali pengali.
+        self::assertSame(0, $pacing->delayFor(0, 400));
+        self::assertSame(90, $pacing->delayFor(1, 400));
+    }
+
+    /** Batasnya inklusif: 300 karakter sudah dihitung panjang. */
+    public function testLongThresholdBoundary(): void
+    {
+        $pacing = Pacing::fromConfig('10', null);
+
+        self::assertFalse($pacing->isLong(299));
+        self::assertTrue($pacing->isLong(300));
+        self::assertSame(10, $pacing->delayFor(0, 299));
+        self::assertSame(30, $pacing->delayFor(0, 300));
+    }
+
+    public function testLongRuleCanBeSwitchedOff(): void
+    {
+        // Ambang 0 mematikan aturannya, sepanjang apa pun pesannya.
+        $off = Pacing::fromConfig('10', null, 0, 5);
+        self::assertFalse($off->isLong(9999));
+        self::assertSame(10, $off->delayFor(0, 9999));
+
+        // Pengali 1 berarti tidak mengalikan apa pun.
+        $flat = Pacing::fromConfig('10', null, 300, 1);
+        self::assertTrue($flat->isLong(500));
+        self::assertSame(10, $flat->delayFor(0, 500));
+    }
+
+    public function testLongValuesAreConfigurableAndSafeToMistype(): void
+    {
+        $custom = Pacing::fromConfig('10', null, '50', '2');
+
+        self::assertSame(50, $custom->longChars());
+        self::assertSame(2, $custom->longFactor());
+        self::assertSame(20, $custom->delayFor(0, 50));
+
+        // Nilai tak terbaca kembali ke bawaan, tidak mematikan pacing-nya.
+        $broken = Pacing::fromConfig('10', null, 'abc', 'xyz');
+
+        self::assertSame(Pacing::DEFAULT_LONG_CHARS, $broken->longChars());
+        self::assertSame(Pacing::DEFAULT_LONG_FACTOR, $broken->longFactor());
+    }
+
+    public function testLongDelayIsStillClampedToMaximum(): void
+    {
+        $pacing = Pacing::fromConfig((string) Pacing::MAX_DELAY, null);
+
+        self::assertSame(Pacing::MAX_DELAY, $pacing->delayFor(0, 9999));
+    }
+
+    public function testMergeHandlesLongKeys(): void
+    {
+        $pacing = Pacing::fromConfig('10', null)->merge(['long_chars' => 5, 'long_factor' => 2]);
+
+        self::assertSame(5, $pacing->longChars());
+        self::assertSame(2, $pacing->longFactor());
+        self::assertSame(20, $pacing->delayFor(0, 5));
+
+        // Yang tidak disebutkan tidak disentuh.
+        self::assertSame(
+            Pacing::DEFAULT_LONG_CHARS,
+            Pacing::fromConfig('10', null)->merge(['long_factor' => 2])->longChars()
+        );
+    }
+
+    public function testLengthCountsCharactersNotBytes(): void
+    {
+        self::assertSame(3, Text::length('ééé'));
+        self::assertSame(6, \strlen('ééé'), 'prasyarat: huruf beraksen lebih dari satu byte');
+    }
+
+    // ---------------------------------------------------------------------
     // Konfigurasi
     // ---------------------------------------------------------------------
 
@@ -223,6 +311,22 @@ final class PacingTest extends TestCase
         self::fakeEnv([]);
 
         self::assertFalse((new Config())->pacing()->isEnabled());
+    }
+
+    public function testConfigReadsLongKeysFromEnvironment(): void
+    {
+        self::fakeEnv([
+            'WHATSAPP_PACING_CYCLE' => '0,30',
+            'WHATSAPP_PACING_LONG_CHARS' => '120',
+            'WHATSAPP_PACING_LONG_FACTOR' => '4',
+        ]);
+
+        $pacing = Config::fromEnvironment()->pacing();
+
+        self::assertSame(120, $pacing->longChars());
+        self::assertSame(4, $pacing->longFactor());
+        self::assertFalse($pacing->isLong(119));
+        self::assertTrue($pacing->isLong(120));
     }
 
     public function testPacingOptionAcceptsArray(): void
@@ -505,5 +609,109 @@ final class PacingTest extends TestCase
 
         // Jeda sudah dititipkan ke server, jadi klien tidak menunggu dua kali.
         self::assertSame([], $this->jeda);
+    }
+
+    // ---------------------------------------------------------------------
+    // Panjang isi pesan ikut menentukan jeda
+    // ---------------------------------------------------------------------
+
+    /**
+     * Pembanding yang sama, siklus yang sama — hanya isi pesannya yang beda.
+     * Itulah buktinya bahwa `sendMessage()` benar-benar membaca badan pesan.
+     */
+    public function testLongerBodyGetsLongerDelay(): void
+    {
+        self::fakeEnv(['WHATSAPP_PACING_CYCLE' => '0,10']);
+        $panjang = str_repeat('a', 400);
+
+        $this->recordSleeps();
+        $this->apiMe(self::apiMeBackend(4), [
+            ['destination' => '0811', 'message' => 'pendek'],
+            ['destination' => '0822', 'message' => $panjang],
+            ['destination' => '0833', 'message' => 'pendek'],
+            ['destination' => '0844', 'message' => $panjang],
+        ]);
+        self::assertSame([30, 30], $this->jeda);
+
+        $this->recordSleeps();
+        $this->apiMe(self::apiMeBackend(4), [
+            ['destination' => '0811', 'message' => 'pendek'],
+            ['destination' => '0822', 'message' => 'pendek'],
+            ['destination' => '0833', 'message' => 'pendek'],
+            ['destination' => '0844', 'message' => 'pendek'],
+        ]);
+        self::assertSame([10, 10], $this->jeda);
+    }
+
+    /** Huruf beraksen dihitung satu karakter, bukan dua byte. */
+    public function testThresholdIsCountedInCharacters(): void
+    {
+        self::fakeEnv(['WHATSAPP_PACING_CYCLE' => '0,10']);
+        $this->recordSleeps();
+
+        // 250 karakter, tapi 500 byte — tidak boleh dianggap pesan panjang.
+        $this->apiMe(self::apiMeBackend(2), [
+            ['destination' => '0811', 'message' => 'pendek'],
+            ['destination' => '0822', 'message' => str_repeat('é', 250)],
+        ]);
+
+        self::assertSame([10], $this->jeda);
+    }
+
+    public function testLongRuleCanBeDisabledForOneCall(): void
+    {
+        self::fakeEnv(['WHATSAPP_PACING_CYCLE' => '0,10']);
+        $this->recordSleeps();
+
+        $this->apiMe(self::apiMeBackend(2), [
+            'messages' => [
+                ['destination' => '0811', 'message' => 'pendek'],
+                ['destination' => '0822', 'message' => str_repeat('a', 400)],
+            ],
+            'pacing' => ['long_factor' => 1],
+        ]);
+
+        self::assertSame([10], $this->jeda);
+    }
+
+    public function testFonnteAppliesLongMessageDelayOnTheServer(): void
+    {
+        self::fakeEnv(['WHATSAPP_PACING_CYCLE' => '0,10']);
+        $backend = new MockBackend([MockBackend::json(['status' => true])]);
+
+        (new Fonnte(['token' => 't'], $backend->executor()))->sendMessage([
+            ['destination' => '0811', 'message' => 'pendek'],
+            ['destination' => '0822', 'message' => str_repeat('a', 400)],
+            ['destination' => '0833', 'message' => 'pendek'],
+        ]);
+
+        $sent = json_decode($backend->lastForm()['data'] ?? '[]', true) ?? [];
+
+        // Pesan ke-2 panjang: 10 detik x 3.
+        self::assertSame(['0', '30', '0'], array_column($sent, 'delay'));
+    }
+
+    public function testOpenWaBatchDelayFollowsTheSecondMessage(): void
+    {
+        self::fakeEnv(['WHATSAPP_PACING_CYCLE' => '0,10']);
+
+        self::assertSame(10000, $this->openWaBulkDelay('pendek'));
+        self::assertSame(30000, $this->openWaBulkDelay(str_repeat('a', 400)));
+    }
+
+    /** Jeda batch OpenWA, dalam milidetik, untuk pesan kedua seperti ini. */
+    private function openWaBulkDelay(string $second): int
+    {
+        $backend = new MockBackend([MockBackend::json(['totalMessages' => 2, 'batchId' => 'b'])]);
+
+        (new OpenWA(
+            ['token' => 't', 'url' => 'https://gw.test', 'session' => 's'],
+            $backend->executor()
+        ))->sendMessage([
+            ['destination' => '0811', 'message' => 'pendek'],
+            ['destination' => '0822', 'message' => $second],
+        ]);
+
+        return (int) $backend->lastJson()['options']['delayBetweenMessages'];
     }
 }

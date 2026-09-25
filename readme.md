@@ -114,19 +114,30 @@ pacing pun mati, tiap gateway memakai bawaannya sendiri — Fonnte 2 detik, Open
 ### Jeda antar pesan (pacing)
 
 Mengirim beruntun dengan jeda yang seragam mudah dikenali sebagai robot. Pacing
-menyusun jeda dari dua bagian, dan keduanya bisa dipakai sendiri-sendiri maupun
+menyusun jeda dari tiga bagian, dan ketiganya bisa dipakai sendiri-sendiri maupun
 bersamaan:
 
 | Kunci | Arti |
 | --- | --- |
 | `WHATSAPP_PACING_CYCLE` | Daftar jeda tetap yang dipakai **bergiliran**, detik. `0,30` berarti pesan ke-1 tanpa jeda, ke-2 jeda 30 detik, ke-3 tanpa jeda, dan seterusnya |
 | `WHATSAPP_PACING_INTERVAL` | Jitter acak yang **ditambahkan** ke tiap jeda siklus, detik. `20-30` berarti setiap jeda ditambah 20–30 detik acak |
+| `WHATSAPP_PACING_LONG_CHARS` | Ambang pesan panjang, dalam **karakter**. Bawaannya 300 |
+| `WHATSAPP_PACING_LONG_FACTOR` | Berapa kali jeda **dilipatkan** untuk pesan sepanjang itu. Bawaannya 3 |
 
-Jadi jeda sebelum pesan ke-`i` adalah `siklus[i % jumlah siklus] + jitter`.
-Dengan keduanya diisi seperti contoh di atas, jedanya berurutan 20–30, 50–60,
-20–30, 50–60, … detik.
+Jadi jeda sebelum pesan ke-`i` adalah
+`(siklus[i % jumlah siklus] + jitter) × pengali pesan panjang`. Dengan
+`0,30` + `20-30` + ambang bawaan 300 karakter, jedanya berurutan 20–30, 50–60,
+20–30, … detik untuk pesan pendek, dan 60–90, 150–180, 60–90, … detik untuk
+pesan 300 karakter ke atas.
 
-Bawaannya **mati**: selama kedua kunci kosong, tiap gateway memakai jeda
+Pesan panjang sengaja ditunggu lebih lama: mengirim teks panjang beruntun lebih
+mencurigakan daripada mengirim pesan pendek, dan pesan panjang juga lebih lama
+"dibaca". Panjangnya dihitung dalam karakter, bukan byte — 250 huruf beraksen
+tetap dianggap pesan pendek. Aturannya bisa dimatikan dengan
+`WHATSAPP_PACING_LONG_CHARS=0`, atau dinetralkan dengan
+`WHATSAPP_PACING_LONG_FACTOR=1`.
+
+Bawaannya **mati**: selama kedua kunci pertama kosong, tiap gateway memakai jeda
 bawaannya sendiri seperti sebelumnya. Ini disengaja — mengirim banyak pesan
 menahan proses pemanggil selama total jeda itu, jadi pacing harus dinyalakan
 dengan sadar.
@@ -140,7 +151,7 @@ $client->send([
         ['destination' => '0811111111', 'message' => 'Pesan pertama'],
         ['destination' => '0822222222', 'message' => 'Pesan kedua'],
     ],
-    'pacing' => ['cycle' => '0,45', 'interval' => '10-20'],
+    'pacing' => ['cycle' => '0,45', 'interval' => '10-20', 'long_factor' => 5],
 ]);
 ```
 
@@ -362,6 +373,8 @@ Lihat [`.env.example`](.env.example). Ringkasnya:
 | `WHATSAPP_TIMEOUT` | Batas waktu request, detik (1–60, default 10) |
 | `WHATSAPP_PACING_CYCLE` | Jeda tetap yang dipakai bergiliran antar pesan, detik. Mis. `0,30`. Kosong = pacing mati |
 | `WHATSAPP_PACING_INTERVAL` | Jitter acak yang ditambahkan ke tiap jeda siklus, detik. Mis. `20-30` |
+| `WHATSAPP_PACING_LONG_CHARS` | Ambang pesan panjang, karakter (default 300). `0` = aturannya dimatikan |
+| `WHATSAPP_PACING_LONG_FACTOR` | Pengali jeda untuk pesan panjang (default 3). `1` = tidak ada pengalian |
 
 ### URL per gateway
 

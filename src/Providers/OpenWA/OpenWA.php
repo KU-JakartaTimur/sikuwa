@@ -145,8 +145,7 @@ final class OpenWA extends AbstractProvider
      */
     public function sendMessage(array|string $message): string
     {
-        $plan = $this->plan($message);
-        $items = $plan['items'];
+        $items = $this->plan($message);
 
         if ($items === []) {
             return 'Tidak ada pesan untuk dikirim';
@@ -156,12 +155,11 @@ final class OpenWA extends AbstractProvider
             throw new ConfigurationException('WHATSAPP_SESSION belum diisi di .env');
         }
 
-        $pacing = $this->pacing($plan['pacing']);
-
         // OpenWA hanya menerima satu angka jeda untuk seluruh batch, bukan jeda
-        // per pesan. Yang paling mewakili siklus adalah jeda sebelum pesan
-        // kedua: jeda pertama yang benar-benar terasa di antara dua pesan.
-        $delay = $items[0]['delay'] ?? $pacing->delayFor(1) ?? OpenWABulkMessage::DEFAULT_DELAY;
+        // per pesan. Yang paling mewakili adalah jeda pesan kedua: jeda pertama
+        // yang benar-benar terasa di antara dua pesan. `delay` pada pesan
+        // pertama tetap dihormati sebagai angka untuk seluruh batch.
+        $delay = $items[1]['delay'] ?? $items[0]['delay'] ?? OpenWABulkMessage::DEFAULT_DELAY;
 
         $bulk = $this->compose(fn (): OpenWABulkMessage => new OpenWABulkMessage($items, $delay));
 

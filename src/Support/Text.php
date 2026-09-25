@@ -48,4 +48,17 @@ final class Text
 
         return false;
     }
+
+    /**
+     * Panjang teks dalam karakter, bukan byte.
+     *
+     * Dipakai pacing untuk menilai apakah sebuah pesan tergolong panjang.
+     * `strlen()` menghitung byte, jadi satu huruf beraksen atau satu emoji
+     * terhitung beberapa kali — pesan pendek bisa salah dianggap panjang hanya
+     * karena bahasanya.
+     */
+    public static function length(string $value): int
+    {
+        return mb_strlen($value);
+    }
 }
