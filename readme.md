@@ -143,6 +143,155 @@ $client->provider();    // instance gateway terpilih
 berarti undiannya diulang — panggil sekali lalu simpan hasilnya kalau beberapa
 pesan harus lewat gateway yang sama.
 
+## Sesi
+
+Selain mengirim pesan, SDK bisa membuat dan memeriksa sesi WhatsApp lewat
+antarmuka yang sama di semua gateway:
+
+```php
+$session = $client->checkSession();   // sesi dari konfigurasi
+
+if (! $session->isConnected()) {
+    echo $session->qrTag();           // <img> QR siap tampil
+}
+
+// Buat sesi/instance baru, lalu pindai QR-nya.
+$baru = $client->createSession(['name' => 'Notifikasi Sekolah']);
+echo $baru->id;
+```
+
+Gateway menyebutnya berbeda-beda — OpenWA "session", ApiMe dan Evolution API
+"instance", wuzapi dan Fonnte "device" — tetapi semuanya mengembalikan
+`Sikuwa\Whatsapp\Session` yang sama:
+
+| Properti | Isi |
+| --- | --- |
+| `$provider` | Nama gateway, mis. `OpenWA` |
+| `$id` | Id sesi menurut gateway |
+| `$status` | Status apa adanya dari gateway, mis. `CONNECTED` atau `open` |
+| `$connected` | Apakah sesi siap mengirim pesan |
+| `$qr` | QR sebagai data URI, bila ada |
+| `$token` | Kredensial yang baru diterbitkan gateway, bila ada |
+| `$phoneNumber` / `$profileName` | Identitas yang tersambung, bila ada |
+| `$raw` | Amplop asli gateway, apa adanya |
+
+`isConnected()`, `hasQr()`, `toArray()`, dan `toJson()` tersedia sebagai
+penolong; `(string) $session` menghasilkan ringkasan siap log, mis.
+`OpenWA: CONNECTED (sess-1)`. Nilai yang tidak disediakan gateway dibiarkan
+kosong, tidak ditebak.
+
+`$token` berisi kredensial yang diterbitkan saat sesi dibuat — token perangkat
+Fonnte, atau `hash.apikey` Evolution API. Itulah yang diisi ke `WHATSAPP_TOKEN`
+supaya pesan bisa dikirim lewat sesi tersebut. Baik `$token` maupun `$raw`
+sengaja **tidak** ikut di `toArray()`/`toJson()`, karena keluaran itu biasanya
+berakhir di log atau response HTTP.
+
+Nama sesi diambil dari `$options` bila diberikan, selain itu dari konfigurasi
+(`WHATSAPP_SESSION` / `WHATSAPP_INSTANCE`) — jadi `createSession()` tanpa
+argumen tetap masuk akal di aplikasi yang kredensialnya sudah ada di `.env`.
+Fonnte adalah pengecualian: `createSession()` di sana memang menuntut `name`
+dan `device`, karena perangkat baru butuh nomor yang belum pernah dipakai.
+
+### QR sesi
+
+Sesi yang belum tersambung bisa dimintai QR-nya lewat `showQr()`. Hasilnya
+`Session` yang sama, dengan `$qr` terisi:
+
+```php
+$qr = $client->showQr();
+
+if ($qr->hasQr()) {
+    echo $qr->qrTag();     // <img src="data:image/png;base64,…" width="260" height="260">
+    echo $qr->qrImage();   // data URI — untuk atribut src
+    echo $qr->qrBase64();  // base64 murni — untuk disimpan atau dikirim sebagai JSON
+}
+```
+
+`$qr` selalu **data URI penuh atau string kosong**, walaupun gateway tidak
+sepakat soal bentuknya: Fonnte mengirim base64 PNG telanjang di `url`, OpenWA
+dan wuzapi mengirim data URI yang sudah lengkap, Evolution API mengirim base64
+di `base64`. Perangkaiannya dikerjakan `Support\Qr::dataUri()`, jadi pemanggil
+tidak perlu tahu bedanya.
+
+**Sesi yang sudah tersambung tidak punya QR.** Gateway yang mengatakannya terus
+terang dilaporkan sebagai `isConnected() === true` dengan `hasQr() === false`,
+bukan sebagai exception:
+
+| Gateway | Jawaban saat sudah tersambung |
+| --- | --- |
+| Evolution API | `{"instance":{"state":"open"}}` |
+| Fonnte | `{"status":false,"reason":"device already connect"}` |
+| Wuzapi | error `already logged in` |
+| OpenWA | HTTP 400 — sebabnya bercampur dengan sesi yang belum `qr_ready`, jadi tetap dilempar |
+
+Karena itu `showQr()` aman dipanggil tanpa memeriksa `checkSession()` lebih
+dulu:
+
+```php
+$qr = $client->showQr();
+
+if ($qr->isConnected()) {
+    // Sudah tersambung — tidak ada yang perlu dipindai.
+} elseif ($qr->hasQr()) {
+    echo $qr->qrTag('Scan untuk menyambungkan WhatsApp', 320);
+}
+```
+
+Catatan per gateway:
+
+- **OpenWA** — `GET /api/sessions/{id}/qr` menuntut API key berperan
+  **operator**; kunci baca biasa ditolak dengan HTTP 403. Endpoint ini hanya
+  menjawab saat sesi sedang menunggu dipindai, dan `status` pada balasannya
+  (`qr_ready`) adalah kesiapan QR, bukan status sesi.
+- **ApiMe** — OpenAPI-nya menyebut balasan endpoint ini hanya sebagai "QR code
+  base64", tanpa skema. SDK karena itu membaca beberapa kemungkinan nama field
+  sekaligus (`qr`, `qrcode`, `qrCode`, `base64`, `image`), termasuk `data` yang
+  berupa string.
+- **Wuzapi** — QR hanya keluar saat sesinya tersambung ke server WhatsApp
+  **tetapi belum login**; `no session` dan `not connected` tetap kegagalan.
+- **Fonnte** — QR memakai **token perangkat** (`WHATSAPP_TOKEN`), bukan account
+  token seperti `createSession()`/`checkSession()`. `showQr('08123456789')`
+  mengirim nomornya sebagai `whatsapp`. Mode `type=code` (kode pairing) belum
+  didukung.
+
+| Gateway | Membuat sesi | Memeriksa sesi | QR sesi |
+| --- | --- | --- | --- |
+| OpenWA | `POST /api/sessions` — `id`, `name`, `config` | `GET /api/sessions/{id}` | `GET /api/sessions/{id}/qr` |
+| ApiMe | `POST /api/instances` — `name`, `webhook_url`, `webhook_secret` | `GET /api/instances/{id}` | `GET /api/instances/{id}/qr` |
+| Evolution API | `POST /instance/create` — `instanceName`, `qrcode`, `webhook` | `GET /instance/connectionState/{instance}` | `GET /instance/connect/{instance}` |
+| Wuzapi | `POST /session/connect` — `subscribe`, `immediate` | `GET /session/status` | `GET /session/qr` |
+| Fonnte | `POST /add-device` — `name`, `device`, `autoread` | `POST /get-devices` | `POST /qr` |
+
+Catatan:
+
+- **Sesi baru biasanya belum tersambung.** OpenWA membuatnya `INITIALIZING`,
+  Evolution API `created`, Fonnte `created`. Ambil QR-nya dengan `showQr()`,
+  lalu pantau dengan `checkSession()`.
+- **wuzapi tidak mengenal id sesi** — token yang terpasang sudah menentukan
+  sesinya, jadi `createSession()` di sana berarti *menyambungkan* sesi dan
+  `checkSession($id)` mengabaikan argumennya. Yang menandakan sesi siap dipakai
+  adalah `LoggedIn`, bukan `Connected`.
+- **Fonnte memakai dua kredensial yang berbeda.** Mengirim pesan memakai token
+  perangkat (`WHATSAPP_TOKEN`), sedangkan Device API — menambah dan membaca
+  perangkat — menuntut **account token** (`WHATSAPP_ACCOUNT_TOKEN`); token
+  perangkat ditolak di sana dengan `"unknown user"`. Karena itu
+  `checkSession()` tanpa argumen mencari perangkat yang tokennya sama dengan
+  `WHATSAPP_TOKEN`, sehingga pertanyaan "apakah perangkat yang saya pakai siap?"
+  terjawab langsung.
+
+  ```php
+  $device = $client->createSession(['name' => 'Notifikasi', 'device' => '08123456789']);
+
+  // Perangkat baru menerbitkan tokennya sendiri — simpan ke WHATSAPP_TOKEN.
+  file_put_contents('.env', "WHATSAPP_TOKEN={$device->token}\n", FILE_APPEND);
+  ```
+- **Membuat instance ApiMe menuntut token user (JWT) atau API token.** Token
+  ber-scope instance — yang justru dipakai untuk mengirim pesan — ditolak
+  dengan HTTP 403, jadi pembuatan instance biasanya dijalankan sekali dari
+  dashboard atau skrip admin.
+- **Nama instance Evolution API hanya boleh huruf kecil dan angka.** SDK
+  menolaknya lebih awal dengan pesan yang jelas, bukan meneruskan HTTP 400.
+
 ## Konfigurasi
 
 Lihat [`.env.example`](.env.example). Ringkasnya:
@@ -155,8 +304,9 @@ Lihat [`.env.example`](.env.example). Ringkasnya:
 | `WHATSAPP_TOKEN` | Token umum, dipakai bila token khusus gateway tidak ada. **Tidak dihitung mode `Auto`** |
 | `WHATSAPP_URL_<Provider>` | Base URL per gateway. **Ini yang sebaiknya dipakai** untuk self-hosted |
 | `WHATSAPP_URL` | Base URL cadangan bila kunci per-provider kosong. **Diabaikan Fonnte** |
-| `WHATSAPP_SESSION` | Khusus OpenWA |
-| `WHATSAPP_INSTANCE` | Khusus ApiMe dan Evolution API |
+| `WHATSAPP_SESSION` | Khusus OpenWA. Juga id bawaan `createSession()`/`checkSession()` |
+| `WHATSAPP_INSTANCE` | Khusus ApiMe dan Evolution API. Juga nama bawaan `createSession()` |
+| `WHATSAPP_ACCOUNT_TOKEN` | Khusus Fonnte Device API (`add-device`, `get-devices`). Bukan token perangkat |
 | `WHATSAPP_TIMEOUT` | Batas waktu request, detik (1–60, default 10) |
 
 ### URL per gateway
@@ -190,6 +340,9 @@ Fonnte punya endpoint tetap sendiri.
   kalau dibaca, satu nilai yang ditujukan untuk gateway self-hosted akan
   mengalihkan pengiriman Fonnte ke host yang salah. Yang diterima hanya URL
   yang jelas milik Fonnte: opsi `url` eksplisit atau `WHATSAPP_URL_Fonnte`.
+  Device API-nya memakai **account token** (`WHATSAPP_ACCOUNT_TOKEN`), bukan
+  token perangkat, dan host-nya diturunkan dari URL pengiriman — jadi override
+  proxy ikut berlaku untuk `add-device` dan `get-devices`.
 - **OpenWA** — butuh `WHATSAPP_SESSION`. Satu pesan dikirim ke `send-text`
   (sinkron, balasannya `messageId`); lebih dari satu dikirim ke `send-bulk`
   (asinkron, balasannya `batchId`, maksimum 100 pesan per batch).
@@ -214,7 +367,7 @@ Semua error melempar subclass dari `Sikuwa\Whatsapp\Exceptions\WhatsappException
 | `ApiException` | Gateway menjawab tapi menolak. Membawa `getStatus()`, `getBody()`, `getErrorKind()` |
 | `AuthException` | 401 — token ditolak |
 | `ForbiddenException` | 403 — token kurang hak (mis. bukan instance token di ApiMe) |
-| `NotFoundException` | 404 — instance/session tidak ditemukan |
+| `NotFoundException` | 404 — instance/session tidak ditemukan, atau perangkat Fonnte yang dicari tidak ada di akun |
 | `ConflictException` | 409 — masih ada pengiriman dengan `Idempotency-Key` yang sama |
 | `RateLimitException` | 429 — satu-satunya status yang aman diretry |
 | `ServiceUnavailableException` | 503 — sesi WhatsApp belum siap, tidak ada pesan terkirim |
@@ -251,10 +404,13 @@ yang sudah teruji.
 
 ## Rencana pengembangan
 
-- [ ] Create sessions
+- [x] Check Session
+- [x] Create sessions
+- [x] Show QR
 - [x] Send messages
 - [ ] Send Media Image
 - [ ] Send Media File
+- [ ] Human Being Typing
 
 ## Kredit
 

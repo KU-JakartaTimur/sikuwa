@@ -9,6 +9,7 @@ use Sikuwa\Whatsapp\Exceptions\ApiException;
 use Sikuwa\Whatsapp\Exceptions\ConfigurationException;
 use Sikuwa\Whatsapp\Http\HttpExecutor;
 use Sikuwa\Whatsapp\Providers\AbstractProvider;
+use Sikuwa\Whatsapp\Session;
 
 /**
  * Gateway wuzapi (https://github.com/asternic/wuzapi), WhatsApp self-hosted
@@ -53,6 +54,81 @@ final class Wuzapi extends AbstractProvider
     public function getProvider(): string
     {
         return self::NAME;
+    }
+
+    protected function authHeaders(): array
+    {
+        return ['Token' => $this->getToken()];
+    }
+
+    /**
+     * Sambungkan sesi: `POST /session/connect`.
+     *
+     * wuzapi tidak punya id sesi — token yang terpasang sudah menentukan sesi
+     * mana yang dipakai, jadi tidak ada nama yang perlu dikirim. Bila sesi
+     * belum pernah dipindai, wuzapi mulai menghasilkan QR; pantau kesiapannya
+     * dengan {@see self::checkSession()}.
+     *
+     * @param array<string,mixed> $options Kunci yang dikenali: `subscribe`
+     *                                     (list jenis event), `immediate` (bool).
+     *
+     * @throws ApiException
+     */
+    public function createSession(array $options = []): Session
+    {
+        $body = $this->postJson("{$this->baseUrl}/session/connect", WuzapiSession::payload($options));
+
+        return WuzapiSession::fromConnect($this->requireSuccess($body));
+    }
+
+    /**
+     * Baca keadaan sesi: `GET /session/status`.
+     *
+     * @param string|null $id Diabaikan: wuzapi tidak mengenal id sesi, token
+     *                        yang terpasang sudah menentukan sesinya. Diterima
+     *                        supaya tanda tangannya sama dengan gateway lain.
+     *
+     * @throws ApiException
+     */
+    public function checkSession(?string $id = null): Session
+    {
+        $body = $this->getJson("{$this->baseUrl}/session/status");
+
+        return WuzapiSession::fromStatus($this->requireSuccess($body));
+    }
+
+    /**
+     * Ambil QR sesi: `GET /session/qr`.
+     *
+     * wuzapi hanya mengeluarkan QR saat sesinya tersambung ke server WhatsApp
+     * tetapi belum login. Ketiga penolakannya dibedakan di sini supaya
+     * pemanggil tidak perlu mencocokkan pesan teks: `already logged in`
+     * dilaporkan sebagai sesi `connected` tanpa QR — memang tidak ada lagi yang
+     * perlu dipindai — sedangkan `no session` dan `not connected` adalah
+     * kegagalan sungguhan dan tetap dilempar.
+     *
+     * @param string|null $id Diabaikan, seperti di {@see self::checkSession()}.
+     *
+     * @throws ApiException
+     */
+    public function showQr(?string $id = null): Session
+    {
+        $response = $this->http->get("{$this->baseUrl}/session/qr", $this->authHeaders());
+        $body = $this->read($response);
+
+        // Diperiksa sebelum amplopnya ditolak: wuzapi melaporkan "sudah login"
+        // sebagai error HTTP, padahal bagi pemanggil itu keadaan, bukan gagal.
+        if ($body !== null && WuzapiShowQr::isAlreadyLoggedIn($body)) {
+            return WuzapiShowQr::alreadyLoggedIn($body);
+        }
+
+        if (! $response->isSuccess()) {
+            $this->reject($response, $body);
+        }
+
+        return WuzapiShowQr::fromResponse(
+            $this->requireSuccess($this->requireJson($body, $response->status), $response->status)
+        );
     }
 
     /**
@@ -116,10 +192,7 @@ final class Wuzapi extends AbstractProvider
         $response = $this->http->post(
             "{$this->baseUrl}/chat/send/text",
             (string) json_encode($message->toArray()),
-            [
-                'Content-Type' => 'application/json',
-                'Token' => $this->getToken(),
-            ]
+            $this->jsonHeaders()
         );
 
         $body = $this->read($response);
@@ -128,12 +201,30 @@ final class Wuzapi extends AbstractProvider
             $this->reject($response, $body);
         }
 
-        $body = $this->requireJson($body, $response->status);
+        $body = $this->requireSuccess(
+            $this->requireJson($body, $response->status),
+            $response->status
+        );
 
-        // wuzapi membalas HTTP 200 pada hampir semua jalur, tapi amplopnya
-        // sendiri punya penanda `success` yang lebih dipercaya.
+        $data = \is_array($body['data'] ?? null) ? $body['data'] : [];
+
+        return 'Sukses, messageId: ' . ($data['Id'] ?? '-');
+    }
+
+    /**
+     * wuzapi membalas HTTP 200 pada hampir semua jalur, termasuk yang gagal.
+     * Amplopnya sendiri punya penanda `success` yang lebih dipercaya, jadi
+     * inilah yang diperiksa — bukan status HTTP-nya.
+     *
+     * @param array<string,mixed> $body
+     * @return array<string,mixed>
+     *
+     * @throws ApiException
+     */
+    private function requireSuccess(array $body, int $fallbackStatus = 0): array
+    {
         if (($body['success'] ?? false) !== true) {
-            $status = (int) ($body['code'] ?? $response->status);
+            $status = (int) ($body['code'] ?? $fallbackStatus);
 
             throw ApiException::classify(
                 $status,
@@ -143,9 +234,7 @@ final class Wuzapi extends AbstractProvider
             );
         }
 
-        $data = \is_array($body['data'] ?? null) ? $body['data'] : [];
-
-        return 'Sukses, messageId: ' . ($data['Id'] ?? '-');
+        return $body;
     }
 
     /**

@@ -12,6 +12,7 @@ use Sikuwa\Whatsapp\Exceptions\TimeoutException;
 use Sikuwa\Whatsapp\Exceptions\WhatsappException;
 use Sikuwa\Whatsapp\Http\HttpExecutor;
 use Sikuwa\Whatsapp\Http\HttpResponse;
+use Sikuwa\Whatsapp\Session;
 
 /**
  * Bagian yang sama pada semua gateway: pemegang konfigurasi, penyunting bentuk
@@ -45,6 +46,47 @@ abstract class AbstractProvider implements Whatsapp
     {
         return $this->config->token($this->getProvider());
     }
+
+    /**
+     * Header autentikasi gateway ini.
+     *
+     * Satu-satunya tempat token dipasang, supaya tiap provider cukup
+     * menyebutkan *bagaimana* ia mengautentikasi — `Authorization: Bearer`,
+     * `X-API-Key`, `apikey`, atau `Token` — tanpa mengulang cara request
+     * dikirim dan dibaca.
+     *
+     * @return array<string,string>
+     */
+    abstract protected function authHeaders(): array;
+
+    /**
+     * Buat sesi/instance baru di gateway.
+     *
+     * Sengaja abstrak: setiap gateway punya istilah, endpoint, dan kredensial
+     * sendiri untuk ini, jadi tidak ada perilaku bawaan yang masuk akal.
+     *
+     * @param array<string,mixed> $options
+     */
+    abstract public function createSession(array $options = []): Session;
+
+    /**
+     * Baca keadaan sesi yang sudah ada.
+     *
+     * @param string|null $id Sesi yang diperiksa; default dari konfigurasi.
+     */
+    abstract public function checkSession(?string $id = null): Session;
+
+    /**
+     * Ambil QR sesi yang sudah ada, untuk dipindai.
+     *
+     * Sama seperti {@see self::createSession()}: abstrak, karena endpoint dan
+     * bentuk balasannya khas tiap gateway — Fonnte mengirim base64 telanjang
+     * di `url`, OpenWA dan wuzapi mengirim data URI yang sudah lengkap.
+     * Penyeragamannya ada di {@see Support\Qr}.
+     *
+     * @param string|null $id Sesi yang diminta QR-nya; default dari konfigurasi.
+     */
+    abstract public function showQr(?string $id = null): Session;
 
     public function config(): Config
     {
@@ -172,6 +214,74 @@ abstract class AbstractProvider implements Whatsapp
         }
 
         return $body;
+    }
+
+    /**
+     * Susun header untuk request berbadan JSON.
+     *
+     * @param array<string,string> $extra Header khusus request ini, mis.
+     *                                     `Idempotency-Key` milik ApiMe.
+     * @return array<string,string>
+     */
+    protected function jsonHeaders(array $extra = []): array
+    {
+        return array_merge(['Content-Type' => 'application/json'], $this->authHeaders(), $extra);
+    }
+
+    /**
+     * POST JSON, lalu baca + tolak + wajib-JSON dalam satu langkah.
+     *
+     * Keempat gateway self-hosted melakukan urutan yang persis sama; hanya URL,
+     * payload, dan header tambahannya yang berbeda.
+     *
+     * @param array<string,mixed>|null $payload Body JSON, atau null untuk
+     *                                          endpoint yang hanya butuh header
+     *                                          autentikasi (mis. Fonnte
+     *                                          `get-devices`).
+     * @param array<string,string>     $extraHeaders
+     * @return array<string,mixed> Body terdecode; tidak pernah null.
+     *
+     * @throws TimeoutException
+     * @throws ApiException
+     */
+    protected function postJson(string $url, ?array $payload = null, array $extraHeaders = []): array
+    {
+        $body = $payload === null ? '' : (string) json_encode($payload);
+
+        return $this->decode($this->http->post($url, $body, $this->jsonHeaders($extraHeaders)));
+    }
+
+    /**
+     * GET, lalu baca + tolak + wajib-JSON. Dipakai endpoint status sesi.
+     *
+     * @return array<string,mixed> Body terdecode; tidak pernah null.
+     *
+     * @throws TimeoutException
+     * @throws ApiException
+     */
+    protected function getJson(string $url): array
+    {
+        return $this->decode($this->http->get($url, $this->authHeaders()));
+    }
+
+    /**
+     * Terjemahkan satu respons menjadi body JSON, atau lempar exception yang
+     * sesuai.
+     *
+     * @return array<string,mixed>
+     *
+     * @throws TimeoutException
+     * @throws ApiException
+     */
+    private function decode(HttpResponse $response): array
+    {
+        $body = $this->read($response);
+
+        if (! $response->isSuccess()) {
+            $this->reject($response, $body);
+        }
+
+        return $this->requireJson($body, $response->status);
     }
 
     /**

@@ -201,6 +201,65 @@ final class Client
         return Config::notificationEnabled();
     }
 
+    /**
+     * Buat sesi/instance baru di gateway yang sedang dipilih.
+     *
+     * Sama seperti {@see self::provider()}, gateway dipilih ulang pada tiap
+     * pemanggilan — untuk `provider = auto` itu berarti undiannya diulang.
+     * Simpan instance gateway kalau pembuatan dan pemeriksaan sesi harus
+     * mengenai gateway yang sama.
+     *
+     * @param array<string,mixed> $options Kunci spesifik gateway, mis. `name`,
+     *                                     `id`, `config`. Lihat
+     *                                     {@see Contracts\Whatsapp::createSession()}.
+     *
+     * @throws WhatsappException
+     */
+    public function createSession(array $options = []): Session
+    {
+        return $this->provider()->createSession($options);
+    }
+
+    /**
+     * Baca keadaan sesi yang sudah ada.
+     *
+     * @param string|null $id Sesi yang diperiksa; default dari konfigurasi
+     *                        (`WHATSAPP_SESSION` / `WHATSAPP_INSTANCE`).
+     *
+     * @throws WhatsappException
+     */
+    public function checkSession(?string $id = null): Session
+    {
+        return $this->provider()->checkSession($id);
+    }
+
+    /**
+     * Ambil QR sesi yang sudah ada, untuk dipindai.
+     *
+     * Dipakai setelah {@see self::createSession()} atau
+     * {@see self::checkSession()} menunjukkan sesi belum tersambung:
+     *
+     * ```php
+     * $qr = $client->showQr();
+     *
+     * if ($qr->hasQr()) {
+     *     echo '<img src="' . $qr->qrImage() . '">';   // atau $qr->qrBase64()
+     * }
+     * ```
+     *
+     * Sesi yang sudah tersambung tidak punya QR, dan itu dilaporkan sebagai
+     * `isConnected() === true` dengan `hasQr() === false` — bukan exception.
+     *
+     * @param string|null $id Sesi yang diminta QR-nya; default dari konfigurasi
+     *                        (`WHATSAPP_SESSION` / `WHATSAPP_INSTANCE`).
+     *
+     * @throws WhatsappException
+     */
+    public function showQr(?string $id = null): Session
+    {
+        return $this->provider()->showQr($id);
+    }
+
     /** @return class-string<Whatsapp> */
     private static function resolve(string $name): string
     {

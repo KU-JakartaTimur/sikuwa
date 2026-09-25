@@ -9,6 +9,7 @@ use Sikuwa\Whatsapp\Exceptions\ApiException;
 use Sikuwa\Whatsapp\Exceptions\ConfigurationException;
 use Sikuwa\Whatsapp\Http\HttpExecutor;
 use Sikuwa\Whatsapp\Providers\AbstractProvider;
+use Sikuwa\Whatsapp\Session;
 
 /**
  * Gateway OpenWA (https://github.com/rmyndharis/OpenWA), WhatsApp self-hosted
@@ -26,8 +27,6 @@ final class OpenWA extends AbstractProvider
     public const NAME = 'OpenWA';
 
     public const DEFAULT_URL = 'https://openwa.whatsapp.com';
-
-
 
     private string $baseUrl;
     private string $sessionId;
@@ -55,6 +54,78 @@ final class OpenWA extends AbstractProvider
     public function getSessionId(): string
     {
         return $this->sessionId;
+    }
+
+    protected function authHeaders(): array
+    {
+        return ['X-API-Key' => $this->getToken()];
+    }
+
+    /**
+     * Buat sesi baru: `POST /api/sessions`.
+     *
+     * Sesi baru berstatus `INITIALIZING`, jadi belum bisa dipakai mengirim.
+     * Ambil QR-nya lewat `GET /api/sessions/{id}/qr`, lalu pantau dengan
+     * {@see self::checkSession()}.
+     *
+     * @param array<string,mixed> $options Kunci yang dikenali: `id`, `name`, `config`.
+     *
+     * @throws ApiException
+     * @throws ConfigurationException
+     */
+    public function createSession(array $options = []): Session
+    {
+        $payload = OpenWASession::payload($options, $this->sessionId);
+        $body = $this->postJson("{$this->baseUrl}/api/sessions", $payload);
+
+        return OpenWASession::fromResponse($body, (string) ($payload['id'] ?? ''));
+    }
+
+    /**
+     * Baca keadaan sesi: `GET /api/sessions/{id}`.
+     *
+     * @throws ApiException
+     * @throws ConfigurationException
+     */
+    public function checkSession(?string $id = null): Session
+    {
+        $sessionId = $id ?? $this->sessionId;
+
+        if ($sessionId === '') {
+            throw new ConfigurationException('WHATSAPP_SESSION belum diisi di .env');
+        }
+
+        return OpenWASession::fromResponse(
+            $this->getJson("{$this->baseUrl}/api/sessions/" . rawurlencode($sessionId)),
+            $sessionId
+        );
+    }
+
+    /**
+     * Ambil QR sesi: `GET /api/sessions/{id}/qr`.
+     *
+     * Hanya menjawab saat sesi sedang menunggu dipindai. Sesi yang belum
+     * mencapai `qr_ready` — termasuk yang sudah tersambung, dan yang sedang
+     * menyambung ulang — ditolak dengan HTTP 400, sedangkan API key yang bukan
+     * kunci berperan operator ditolak dengan HTTP 403. Karena satu status
+     * dipakai untuk beberapa sebab sekaligus, pesan dari gateway sendiri yang
+     * paling menentukan.
+     *
+     * @throws ApiException
+     * @throws ConfigurationException
+     */
+    public function showQr(?string $id = null): Session
+    {
+        $sessionId = $id ?? $this->sessionId;
+
+        if ($sessionId === '') {
+            throw new ConfigurationException('WHATSAPP_SESSION belum diisi di .env');
+        }
+
+        return OpenWAShowQr::fromResponse(
+            $this->getJson("{$this->baseUrl}/api/sessions/" . rawurlencode($sessionId) . '/qr'),
+            $sessionId
+        );
     }
 
     /**
@@ -96,55 +167,25 @@ final class OpenWA extends AbstractProvider
     /** POST /api/sessions/{sessionId}/messages/send-text */
     private function sendText(OpenWAMessage $message): string
     {
-        $response = $this->post('messages/send-text', $message->toArray());
+        $body = $this->postJson($this->sessionUrl('messages/send-text'), $message->toArray());
 
-        if (\is_string($response)) {
-            return $response;
-        }
-
-        return 'Sukses, messageId: ' . ($response['messageId'] ?? '-');
+        return 'Sukses, messageId: ' . ($body['messageId'] ?? '-');
     }
 
     /** POST /api/sessions/{sessionId}/messages/send-bulk */
     private function sendBulk(OpenWABulkMessage $bulk): string
     {
-        $response = $this->post('messages/send-bulk', $bulk->toArray());
+        $body = $this->postJson($this->sessionUrl('messages/send-bulk'), $bulk->toArray());
 
-        if (\is_string($response)) {
-            return $response;
-        }
-
-        $total = $response['totalMessages'] ?? $bulk->count();
-        $batchId = $response['batchId'] ?? '-';
+        $total = $body['totalMessages'] ?? $bulk->count();
+        $batchId = $body['batchId'] ?? '-';
 
         return "Batch diterima ({$total} pesan), batchId: {$batchId}";
     }
 
-    /**
-     * Kirim request JSON ke OpenWA.
-     *
-     * @param array<string,mixed> $payload
-     * @return array<string,mixed>|string body terdecode kalau sukses, atau string penanda kegagalan
-     */
-    private function post(string $path, array $payload): array|string
+    /** URL endpoint yang bernaung di bawah sesi, mis. `messages/send-text`. */
+    private function sessionUrl(string $path): string
     {
-        $url = "{$this->baseUrl}/api/sessions/" . rawurlencode($this->sessionId) . "/{$path}";
-
-        $response = $this->http->post(
-            $url,
-            (string) json_encode($payload),
-            [
-                'Content-Type' => 'application/json',
-                'X-API-Key' => $this->getToken(),
-            ]
-        );
-
-        $body = $this->read($response);
-
-        if (! $response->isSuccess()) {
-            $this->reject($response, $body);
-        }
-
-        return $this->requireJson($body, $response->status);
+        return "{$this->baseUrl}/api/sessions/" . rawurlencode($this->sessionId) . "/{$path}";
     }
 }

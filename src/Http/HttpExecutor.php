@@ -17,9 +17,10 @@ use GuzzleHttp\Exception\GuzzleException;
  * {@see \GuzzleHttp\Handler\MockHandler} lewat opsi `httpClient` pada
  * {@see \Sikuwa\Whatsapp\Client} — tanpa monkey-patching global.
  *
- * Method `post()` tidak pernah melempar exception; kegagalan transport
- * dilaporkan lewat {@see HttpResponse::$error}. Yang melempar adalah provider,
- * supaya pesan errornya bisa disesuaikan dengan amplop gateway masing-masing.
+ * Method `post()` dan `get()` tidak pernah melempar exception; kegagalan
+ * transport dilaporkan lewat {@see HttpResponse::$error}. Yang melempar adalah
+ * provider, supaya pesan errornya bisa disesuaikan dengan amplop gateway
+ * masing-masing.
  */
 final class HttpExecutor
 {
@@ -61,6 +62,31 @@ final class HttpExecutor
      */
     public function post(string $url, array|string $body, array $headers = []): HttpResponse
     {
+        return $this->send('POST', $url, $body, $headers);
+    }
+
+    /**
+     * Kirim satu request GET tanpa body.
+     *
+     * Dipakai endpoint yang hanya membaca keadaan — mis. pemeriksaan sesi —
+     * sehingga provider tidak perlu merakit request-nya sendiri.
+     *
+     * @param array<string,string> $headers
+     */
+    public function get(string $url, array $headers = []): HttpResponse
+    {
+        return $this->send('GET', $url, null, $headers);
+    }
+
+    /**
+     * Satu-satunya tempat request benar-benar ditembak, supaya aturan yang
+     * berlaku untuk semua method (tanpa redirect, tanpa throw, timeout) hanya
+     * ditulis sekali.
+     *
+     * @param array<string,string> $headers
+     */
+    private function send(string $method, string $url, array|string|null $body, array $headers): HttpResponse
+    {
         $options = [
             // Status non-2xx ditangani sendiri oleh provider, bukan dilempar Guzzle.
             'http_errors' => false,
@@ -76,12 +102,12 @@ final class HttpExecutor
 
         if (\is_array($body)) {
             $options['form_params'] = $body;
-        } else {
+        } elseif (\is_string($body)) {
             $options['body'] = $body;
         }
 
         try {
-            $response = $this->http->request('POST', $url, $options);
+            $response = $this->http->request($method, $url, $options);
         } catch (ConnectException $e) {
             // cURL error 28 (CURLE_OPERATION_TIMEDOUT) adalah penanda timeout yang
             // paling andal: nomor errno tidak bergantung locale maupun versi.

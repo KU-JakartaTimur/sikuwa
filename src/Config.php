@@ -19,7 +19,7 @@ namespace Sikuwa\Whatsapp;
  * Kunci yang dikenali: `WA_NOTIFICATION`, `WHATSAPP_PROVIDER`,
  * `WHATSAPP_TOKEN`, `WHATSAPP_TOKEN_<Provider>`, `WHATSAPP_URL`,
  * `WHATSAPP_URL_<Provider>`, `WHATSAPP_SESSION`, `WHATSAPP_INSTANCE`,
- * `WHATSAPP_TIMEOUT`.
+ * `WHATSAPP_ACCOUNT_TOKEN`, `WHATSAPP_TIMEOUT`.
  */
 final class Config
 {
@@ -37,6 +37,8 @@ final class Config
      * @param array<string,string> $headers Header tambahan untuk setiap request.
      * @param array<string,string> $urls URL per provider, mis. ['OpenWA' => 'https://wa.internal'].
      *                                   Menang atas `WHATSAPP_URL_<Provider>`.
+     * @param string|null $accountToken Token akun, khusus Fonnte Device API —
+     *                                  lihat {@see self::accountToken()}.
      */
     public function __construct(
         private ?string $token = null,
@@ -47,7 +49,8 @@ final class Config
         private array $tokens = [],
         private ?string $provider = null,
         private array $headers = [],
-        private array $urls = []
+        private array $urls = [],
+        private ?string $accountToken = null
     ) {
     }
 
@@ -57,7 +60,8 @@ final class Config
      * @param array{
      *     token?:string, url?:string, session?:string, instance?:string,
      *     timeout?:int|float, tokens?:array<string,string>, provider?:string,
-     *     headers?:array<string,string>, urls?:array<string,string>
+     *     headers?:array<string,string>, urls?:array<string,string>,
+     *     account_token?:string
      * }|Config|null $options
      */
     public static function from(array|Config|null $options): self
@@ -80,6 +84,7 @@ final class Config
             provider: $options['provider'] ?? null,
             headers: $options['headers'] ?? [],
             urls: $options['urls'] ?? [],
+            accountToken: $options['account_token'] ?? null,
         );
     }
 
@@ -93,6 +98,7 @@ final class Config
             instance: self::env('WHATSAPP_INSTANCE'),
             timeout: self::env('WHATSAPP_TIMEOUT') === null ? null : (float) self::env('WHATSAPP_TIMEOUT'),
             provider: self::env('WHATSAPP_PROVIDER'),
+            accountToken: self::env('WHATSAPP_ACCOUNT_TOKEN'),
         );
     }
 
@@ -215,6 +221,19 @@ final class Config
     public function instance(): string
     {
         return $this->instance ?? self::env('WHATSAPP_INSTANCE') ?? '';
+    }
+
+    /**
+     * Token akun — hanya Fonnte, untuk Device API-nya.
+     *
+     * Sengaja terpisah dari {@see token()} karena keduanya kredensial yang
+     * berbeda: token perangkat dipakai mengirim pesan, sedangkan menambah dan
+     * membaca daftar perangkat menuntut token akun. Menukar keduanya hanya
+     * menghasilkan `"unknown user"`.
+     */
+    public function accountToken(): string
+    {
+        return $this->accountToken ?? self::env('WHATSAPP_ACCOUNT_TOKEN') ?? '';
     }
 
     /**

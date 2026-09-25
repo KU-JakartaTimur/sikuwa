@@ -9,6 +9,7 @@ use Sikuwa\Whatsapp\Exceptions\ApiException;
 use Sikuwa\Whatsapp\Exceptions\ConfigurationException;
 use Sikuwa\Whatsapp\Http\HttpExecutor;
 use Sikuwa\Whatsapp\Providers\AbstractProvider;
+use Sikuwa\Whatsapp\Session;
 
 /**
  * Gateway ApiMe (https://github.com/open-apime/apime), WhatsApp self-hosted
@@ -61,6 +62,78 @@ final class ApiMe extends AbstractProvider
     public function getInstanceId(): string
     {
         return $this->instanceId;
+    }
+
+    protected function authHeaders(): array
+    {
+        return ['Authorization' => 'Bearer ' . $this->getToken()];
+    }
+
+    /**
+     * Buat instance baru: `POST /api/instances`.
+     *
+     * Endpoint ini menuntut token **user** (JWT) atau API token. Token
+     * ber-scope instance — yang dipakai untuk mengirim pesan — ditolak dengan
+     * HTTP 403, jadi pembuatan instance biasanya dijalankan sekali dari
+     * dashboard atau skrip admin, bukan dari jalur notifikasi.
+     *
+     * @param array<string,mixed> $options Kunci yang dikenali: `name`,
+     *                                     `webhook_url`, `webhook_secret`.
+     *
+     * @throws ApiException
+     * @throws ConfigurationException
+     */
+    public function createSession(array $options = []): Session
+    {
+        $payload = ApiMeSession::payload($options, $this->instanceId);
+        $body = $this->postJson("{$this->baseUrl}/api/instances", $payload);
+
+        return ApiMeSession::fromResponse($body, (string) ($payload['name'] ?? ''));
+    }
+
+    /**
+     * Baca keadaan instance: `GET /api/instances/{id}`.
+     *
+     * @throws ApiException
+     * @throws ConfigurationException
+     */
+    public function checkSession(?string $id = null): Session
+    {
+        $instanceId = $id ?? $this->instanceId;
+
+        if ($instanceId === '') {
+            throw new ConfigurationException('WHATSAPP_INSTANCE belum diisi di .env');
+        }
+
+        return ApiMeSession::fromResponse(
+            $this->getJson("{$this->baseUrl}/api/instances/" . rawurlencode($instanceId)),
+            $instanceId
+        );
+    }
+
+    /**
+     * Ambil QR instance: `GET /api/instances/{id}/qr`.
+     *
+     * Inilah QR yang dipindai untuk menyambungkan instance yang baru dibuat.
+     * ApiMe tidak mendokumentasikan skema balasannya — OpenAPI-nya hanya
+     * menyebut "QR code base64" — jadi pembacaannya diserahkan ke
+     * {@see ApiMeShowQr}.
+     *
+     * @throws ApiException
+     * @throws ConfigurationException
+     */
+    public function showQr(?string $id = null): Session
+    {
+        $instanceId = $id ?? $this->instanceId;
+
+        if ($instanceId === '') {
+            throw new ConfigurationException('WHATSAPP_INSTANCE belum diisi di .env');
+        }
+
+        return ApiMeShowQr::fromResponse(
+            $this->getJson("{$this->baseUrl}/api/instances/" . rawurlencode($instanceId) . '/qr'),
+            $instanceId
+        );
     }
 
     /**
@@ -125,25 +198,13 @@ final class ApiMe extends AbstractProvider
     /** POST /api/instances/{instanceId}/messages/text */
     private function sendText(ApiMeMessage $message): string
     {
-        $url = "{$this->baseUrl}/api/instances/" . rawurlencode($this->instanceId) . '/messages/text';
-
-        $response = $this->http->post(
-            $url,
-            (string) json_encode($message->toArray()),
-            [
-                'Content-Type' => 'application/json',
-                'Authorization' => 'Bearer ' . $this->getToken(),
-                'Idempotency-Key' => $message->idempotencyKey($this->instanceId),
-            ]
+        $body = $this->postJson(
+            "{$this->baseUrl}/api/instances/" . rawurlencode($this->instanceId) . '/messages/text',
+            $message->toArray(),
+            // Idempotency-Key deterministik per isi pesan, supaya kartu yang
+            // ter-scan dua kali beruntun tidak jadi dua pesan.
+            ['Idempotency-Key' => $message->idempotencyKey($this->instanceId)]
         );
-
-        $body = $this->read($response);
-
-        if (! $response->isSuccess()) {
-            $this->reject($response, $body);
-        }
-
-        $body = $this->requireJson($body, $response->status);
 
         // Sukses dibungkus sebagai {"data": {...Message}}.
         $data = \is_array($body['data'] ?? null) ? $body['data'] : [];

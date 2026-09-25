@@ -9,6 +9,7 @@ use Sikuwa\Whatsapp\Exceptions\ApiException;
 use Sikuwa\Whatsapp\Exceptions\ConfigurationException;
 use Sikuwa\Whatsapp\Http\HttpExecutor;
 use Sikuwa\Whatsapp\Providers\AbstractProvider;
+use Sikuwa\Whatsapp\Session;
 
 /**
  * Gateway Evolution API (https://github.com/evolution-foundation/evolution-api),
@@ -54,6 +55,79 @@ final class EvolutionAPI extends AbstractProvider
     public function getInstanceName(): string
     {
         return $this->instanceName;
+    }
+
+    protected function authHeaders(): array
+    {
+        return ['apikey' => $this->getToken()];
+    }
+
+    /**
+     * Buat instance baru: `POST /instance/create`.
+     *
+     * Dengan `qrcode => true` (bawaan), balasannya sudah membawa QR di
+     * `qrcode.base64` sehingga sesi bisa langsung dipindai. Nama instance hanya
+     * boleh huruf kecil dan angka.
+     *
+     * @param array<string,mixed> $options Kunci yang dikenali: `instanceName`
+     *                                     (alias `name`), `token`, `integration`,
+     *                                     `webhook`, `events`, `qrcode`.
+     *
+     * @throws ApiException
+     * @throws ConfigurationException
+     */
+    public function createSession(array $options = []): Session
+    {
+        $payload = EvolutionAPISession::payload($options, $this->instanceName);
+        $body = $this->postJson("{$this->baseUrl}/instance/create", $payload);
+
+        return EvolutionAPISession::fromResponse($body, (string) ($payload['instanceName'] ?? ''));
+    }
+
+    /**
+     * Baca keadaan instance: `GET /instance/connectionState/{instance}`.
+     *
+     * @throws ApiException
+     * @throws ConfigurationException
+     */
+    public function checkSession(?string $id = null): Session
+    {
+        $instanceName = $id ?? $this->instanceName;
+
+        if ($instanceName === '') {
+            throw new ConfigurationException('WHATSAPP_INSTANCE belum diisi di .env');
+        }
+
+        return EvolutionAPISession::fromResponse(
+            $this->getJson("{$this->baseUrl}/instance/connectionState/" . rawurlencode($instanceName)),
+            $instanceName
+        );
+    }
+
+    /**
+     * Ambil QR instance: `GET /instance/connect/{instance}`.
+     *
+     * Balasannya berubah mengikuti keadaan instance. Selama masih `close`,
+     * QR-nya ada di `base64`; begitu instance `open`, Evolution membalas
+     * keadaan instancenya alih-alih QR. Kedua bentuk itu sudah dikenali
+     * {@see EvolutionAPISession::fromResponse()}, jadi di sini tidak perlu
+     * penormal tersendiri — hasilnya sesi `connected` tanpa QR.
+     *
+     * @throws ApiException
+     * @throws ConfigurationException
+     */
+    public function showQr(?string $id = null): Session
+    {
+        $instanceName = $id ?? $this->instanceName;
+
+        if ($instanceName === '') {
+            throw new ConfigurationException('WHATSAPP_INSTANCE belum diisi di .env');
+        }
+
+        return EvolutionAPISession::fromResponse(
+            $this->getJson("{$this->baseUrl}/instance/connect/" . rawurlencode($instanceName)),
+            $instanceName
+        );
     }
 
     /**
@@ -124,24 +198,10 @@ final class EvolutionAPI extends AbstractProvider
     /** POST /message/sendText/{instanceName} */
     private function sendText(EvolutionAPIMessage $message): string
     {
-        $url = "{$this->baseUrl}/message/sendText/" . rawurlencode($this->instanceName);
-
-        $response = $this->http->post(
-            $url,
-            (string) json_encode($message->toArray()),
-            [
-                'Content-Type' => 'application/json',
-                'apikey' => $this->getToken(),
-            ]
+        $body = $this->postJson(
+            "{$this->baseUrl}/message/sendText/" . rawurlencode($this->instanceName),
+            $message->toArray()
         );
-
-        $body = $this->read($response);
-
-        if (! $response->isSuccess()) {
-            $this->reject($response, $body);
-        }
-
-        $body = $this->requireJson($body, $response->status);
 
         // Sukses mengembalikan objek pesan Baileys; id-nya ada di key.id.
         $key = \is_array($body['key'] ?? null) ? $body['key'] : [];
