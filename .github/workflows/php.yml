@@ -17,23 +17,34 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    # PHP disiapkan eksplisit: composer.json menuntut ext-mbstring, sedangkan
+    # versi dan ekstensi bawaan runner bisa berubah tanpa pemberitahuan.
+    - name: Setup PHP
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: '8.3'
+        extensions: mbstring
+        coverage: none
+
     - name: Validate composer.json and composer.lock
       run: composer validate --strict
 
     - name: Cache Composer packages
       id: composer-cache
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: vendor
-        key: ${{ runner.os }}-php-${{ hashFiles('**/composer.lock') }}
+        # Kunci dari composer.json, bukan composer.lock: ini library, jadi lock
+        # file-nya memang tidak dipublikasikan (lihat .gitignore) dan
+        # hashFiles('**/composer.lock') akan selalu kosong.
+        key: ${{ runner.os }}-php-${{ hashFiles('composer.json') }}
         restore-keys: |
           ${{ runner.os }}-php-
 
     - name: Install dependencies
       run: composer install --prefer-dist --no-progress
 
-    # Add a test script to composer.json, for instance: "test": "vendor/bin/phpunit"
-    # Docs: https://getcomposer.org/doc/articles/scripts.md
-
-    # - name: Run test suite
-    #   run: composer run-script test
+    # Skrip `test` sudah ada di composer.json ("test": "phpunit"), jadi langkah
+    # ini bisa langsung dipakai.
+    - name: Run test suite
+      run: composer run-script test
