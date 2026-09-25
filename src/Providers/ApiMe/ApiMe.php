@@ -10,6 +10,8 @@ use Sikuwa\Whatsapp\Exceptions\ConfigurationException;
 use Sikuwa\Whatsapp\Http\HttpExecutor;
 use Sikuwa\Whatsapp\Providers\AbstractProvider;
 use Sikuwa\Whatsapp\Session;
+use Sikuwa\Whatsapp\Support\File;
+use Sikuwa\Whatsapp\Support\PhoneNumber;
 
 /**
  * Gateway ApiMe (https://github.com/open-apime/apime), WhatsApp self-hosted
@@ -196,6 +198,77 @@ final class ApiMe extends AbstractProvider
         }
 
         return $prepared;
+    }
+
+    /**
+     * Kirim satu berkas lewat ApiMe.
+     *
+     * ApiMe menuntut berkasnya diunggah sebagai multipart, bukan dikirim
+     * sebagai base64 di dalam JSON, jadi isinya diubah dulu menjadi byte
+     * mentah. Ada dua endpoint terpisah dengan nama kolom yang berbeda:
+     * gambar memakai `type=image`, dokumen memakai `fileName`.
+     *
+     * URL publik tidak bisa dipakai di sini — ApiMe tidak mengunduh apa pun
+     * sendiri, ia hanya menerima unggahan.
+     *
+     * @throws ApiException
+     * @throws ConfigurationException
+     */
+    protected function sendMedia(string $destination, File $file, string $caption): string
+    {
+        if ($this->instanceId === '') {
+            throw new ConfigurationException('WHATSAPP_INSTANCE belum diisi di .env');
+        }
+
+        if ($file->isUrl()) {
+            throw new ConfigurationException(
+                'ApiMe menerima berkasnya sebagai unggahan biner, bukan URL: '
+                . 'unduh berkasnya lebih dulu, lalu kirim isinya sebagai base64 atau data URI'
+            );
+        }
+
+        $to = str_contains($destination, '@')
+            ? $destination
+            : PhoneNumber::normalize($destination);
+
+        if ($to === '') {
+            throw new ConfigurationException("Nomor tujuan '{$destination}' tidak valid");
+        }
+
+        if ($file->isImage()) {
+            $endpoint = 'messages/media';
+            $fields = ['to' => $to, 'type' => 'image'];
+        } else {
+            $endpoint = 'messages/document';
+            $fields = ['to' => $to, 'fileName' => $file->filename];
+        }
+
+        if ($caption !== '') {
+            $fields['caption'] = $caption;
+        }
+
+        $parts = [];
+
+        foreach ($fields as $name => $value) {
+            $parts[] = ['name' => $name, 'contents' => $value];
+        }
+
+        $parts[] = [
+            'name' => 'file',
+            'contents' => $file->bytes(),
+            'filename' => $file->filename,
+            'headers' => ['Content-Type' => $file->mime],
+        ];
+
+        $body = $this->postMultipartJson(
+            "{$this->baseUrl}/api/instances/" . rawurlencode($this->instanceId) . "/{$endpoint}",
+            $parts
+        );
+
+        // Sukses dibungkus sebagai {"data": {...Message}}, sama seperti teks.
+        $data = \is_array($body['data'] ?? null) ? $body['data'] : [];
+
+        return 'Sukses, messageId: ' . ($data['whatsappId'] ?? $data['id'] ?? '-');
     }
 
     /** POST /api/instances/{instanceId}/messages/text */

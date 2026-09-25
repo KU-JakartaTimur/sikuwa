@@ -51,6 +51,79 @@ interface Whatsapp
     public function sendMessage(array|string $message): string;
 
     /**
+     * Kirim satu gambar.
+     *
+     * Bentuk pesannya seragam di semua gateway:
+     *
+     * ```php
+     * [
+     *     'destination' => '081234567890',
+     *     'image'       => 'data:image/png;base64,iVBORw0KGgo…',
+     *     'filename'    => 'bukti.png',        // opsional
+     *     'caption'     => 'Bukti transfer',   // opsional
+     * ]
+     * ```
+     *
+     * Isi `image` boleh salah satu dari tiga bentuk; gateway-nya sendiri yang
+     * menyesuaikan:
+     *
+     * - **data URI** (`data:image/png;base64,…`) — bentuk paling aman, karena
+     *   jenis berkasnya ikut terbawa;
+     * - **base64 telanjang**, tanpa awalan `data:`. Jenisnya lalu ditebak dari
+     *   `filename`, dan menjadi `application/octet-stream` bila ekstensinya
+     *   tidak dikenali;
+     * - **URL publik** (`https://…`), bila gateway boleh mengunduhnya sendiri.
+     *   ApiMe dan wuzapi tidak bisa — keduanya menuntut isi berkasnya ikut
+     *   dikirim, dan akan melempar {@see Exceptions\ConfigurationException}
+     *   yang menjelaskan bahwa berkasnya perlu diunduh lebih dulu.
+     *
+     * Kunci `media` diterima sebagai alias `image`, supaya pemanggil yang
+     * menyimpan berkasnya secara umum tidak perlu tahu method mana yang akan
+     * dipakai.
+     *
+     * Yang menentukan sebuah berkas dikirim sebagai gambar atau dokumen adalah
+     * **jenis berkasnya**, bukan method yang dipanggil — jadi `sendImage()`
+     * dengan PDF tetap terkirim sebagai dokumen, dan sebaliknya.
+     *
+     * @param array<string,mixed> $message
+     *
+     * @return string Detail hasil yang siap dicatat ke log, berawalan
+     *                `"Sukses"` seperti {@see self::sendMessage()}.
+     *
+     * @throws \Sikuwa\Whatsapp\Exceptions\WhatsappException
+     */
+    public function sendImage(array $message): string;
+
+    /**
+     * Kirim satu berkas/dokumen (PDF, DOCX, XLSX, ZIP, dan seterusnya).
+     *
+     * Bentuk pesannya sama dengan {@see self::sendImage()}, hanya kuncinya
+     * `file`:
+     *
+     * ```php
+     * [
+     *     'destination' => '081234567890',
+     *     'file'        => $base64Pdf,        // atau 'media'
+     *     'filename'    => 'invoice-1209.pdf',
+     *     'caption'     => 'Invoice bulan ini',
+     * ]
+     * ```
+     *
+     * `filename` lebih penting di sini daripada pada gambar: ia menentukan nama
+     * yang dilihat penerima sekaligus jenis berkasnya, dan beberapa gateway
+     * menolak dokumen tanpa nama. Karena itu isilah `filename` bila isinya
+     * base64 telanjang.
+     *
+     * @param array<string,mixed> $message
+     *
+     * @return string Detail hasil yang siap dicatat ke log, berawalan
+     *                `"Sukses"` seperti {@see self::sendMessage()}.
+     *
+     * @throws \Sikuwa\Whatsapp\Exceptions\WhatsappException
+     */
+    public function sendFile(array $message): string;
+
+    /**
      * Buat sesi/instance baru di gateway.
      *
      * Nama sesi diambil dari `$options` bila ada, selain itu dari konfigurasi

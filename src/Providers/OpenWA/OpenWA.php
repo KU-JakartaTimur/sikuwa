@@ -10,6 +10,8 @@ use Sikuwa\Whatsapp\Exceptions\ConfigurationException;
 use Sikuwa\Whatsapp\Http\HttpExecutor;
 use Sikuwa\Whatsapp\Providers\AbstractProvider;
 use Sikuwa\Whatsapp\Session;
+use Sikuwa\Whatsapp\Support\File;
+use Sikuwa\Whatsapp\Support\PhoneNumber;
 
 /**
  * Gateway OpenWA (https://github.com/rmyndharis/OpenWA), WhatsApp self-hosted
@@ -170,6 +172,59 @@ final class OpenWA extends AbstractProvider
         return $bulk->count() === 1
             ? $this->sendText($bulk->first())
             : $this->sendBulk($bulk);
+    }
+
+    /**
+     * Kirim satu berkas lewat OpenWA.
+     *
+     * Ada dua endpoint terpisah — `send-image` dan `send-document` — dengan
+     * bentuk body yang sama; yang menentukan adalah jenis berkasnya.
+     *
+     * OpenWA menerima base64 MENTAH dan mengirim `mimetype` di kolom sendiri,
+     * jadi awalan `data:…;base64,` justru harus dibuang. Kalau sumbernya URL
+     * publik, yang dikirim cukup `url` saja supaya server OpenWA yang
+     * mengunduh — bukan keduanya sekaligus.
+     *
+     * @throws ApiException
+     * @throws ConfigurationException
+     */
+    protected function sendMedia(string $destination, File $file, string $caption): string
+    {
+        if ($this->sessionId === '') {
+            throw new ConfigurationException('WHATSAPP_SESSION belum diisi di .env');
+        }
+
+        // OpenWA menolak nomor mentah: `chatId` wajib berupa JID lengkap.
+        $chatId = PhoneNumber::toWid($destination);
+
+        // `toWid()` membentuk "@c.us" begitu nomornya kosong, dan itu akan
+        // ditolak server dengan pesan yang tidak menjelaskan apa-apa.
+        if (str_starts_with($chatId, '@')) {
+            throw new ConfigurationException("Nomor tujuan '{$destination}' tidak valid");
+        }
+
+        $payload = [
+            'chatId' => $chatId,
+            'mimetype' => $file->mime,
+            'filename' => $file->filename,
+        ];
+
+        if ($caption !== '') {
+            $payload['caption'] = $caption;
+        }
+
+        if ($file->isUrl()) {
+            $payload['url'] = $file->payload;
+        } else {
+            $payload['base64'] = $file->base64();
+        }
+
+        $body = $this->postJson(
+            $this->sessionUrl($file->isImage() ? 'messages/send-image' : 'messages/send-document'),
+            $payload
+        );
+
+        return 'Sukses, messageId: ' . ($body['messageId'] ?? '-');
     }
 
     /** POST /api/sessions/{sessionId}/messages/send-text */

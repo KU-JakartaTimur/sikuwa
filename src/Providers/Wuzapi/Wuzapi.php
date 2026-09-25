@@ -10,6 +10,8 @@ use Sikuwa\Whatsapp\Exceptions\ConfigurationException;
 use Sikuwa\Whatsapp\Http\HttpExecutor;
 use Sikuwa\Whatsapp\Providers\AbstractProvider;
 use Sikuwa\Whatsapp\Session;
+use Sikuwa\Whatsapp\Support\File;
+use Sikuwa\Whatsapp\Support\PhoneNumber;
 
 /**
  * Gateway wuzapi (https://github.com/asternic/wuzapi), WhatsApp self-hosted
@@ -192,9 +194,79 @@ final class Wuzapi extends AbstractProvider
     /** POST /chat/send/text */
     private function sendText(WuzapiMessage $message): string
     {
+        $body = $this->sendJson('text', $message->toArray());
+        $data = \is_array($body['data'] ?? null) ? $body['data'] : [];
+
+        return 'Sukses, messageId: ' . ($data['Id'] ?? '-');
+    }
+
+    /**
+     * Kirim satu berkas lewat wuzapi.
+     *
+     * Ada dua endpoint terpisah — `image` dan `document` — dan keduanya hanya
+     * menerima data URI, bukan URL publik: wuzapi tidak mengunduh apa pun
+     * sendiri. Dokumen diminta sebagai `octet-stream` apa pun jenis aslinya,
+     * jadi jenis berkasnya tidak diteruskan ke sana.
+     *
+     * @throws ApiException
+     * @throws ConfigurationException
+     */
+    protected function sendMedia(string $destination, File $file, string $caption): string
+    {
+        if ($file->isUrl()) {
+            throw new ConfigurationException(
+                'wuzapi hanya menerima isi berkas sebagai data URI, bukan URL: '
+                . 'unduh berkasnya lebih dulu, lalu kirim isinya sebagai base64 atau data URI'
+            );
+        }
+
+        $phone = str_contains($destination, '@')
+            ? $destination
+            : PhoneNumber::normalize($destination);
+
+        if ($phone === '') {
+            throw new ConfigurationException("Nomor tujuan '{$destination}' tidak valid");
+        }
+
+        if ($file->isImage()) {
+            $payload = ['Phone' => $phone, 'Image' => $file->dataUri()];
+
+            if ($caption !== '') {
+                $payload['Caption'] = $caption;
+            }
+
+            $body = $this->sendJson('image', $payload);
+        } else {
+            $body = $this->sendJson('document', [
+                'Phone' => $phone,
+                'FileName' => $file->filename,
+                // Dokumentasi wuzapi meminta dokumen dikirim sebagai
+                // octet-stream, bukan sebagai jenis berkas sebenarnya.
+                'Document' => 'data:' . File::DEFAULT_MIME . ';base64,' . $file->base64(),
+            ]);
+        }
+
+        $data = \is_array($body['data'] ?? null) ? $body['data'] : [];
+
+        return 'Sukses, messageId: ' . ($data['Id'] ?? '-');
+    }
+
+    /**
+     * POST JSON ke `/chat/send/<jenis>`, lalu wajibkan penanda `success`.
+     *
+     * Dipakai bersama pengiriman teks dan berkas: keduanya memakai amplop yang
+     * sama, dan wuzapi membalas HTTP 200 bahkan saat gagal.
+     *
+     * @param array<string,mixed> $payload
+     * @return array<string,mixed>
+     *
+     * @throws ApiException
+     */
+    private function sendJson(string $kind, array $payload): array
+    {
         $response = $this->http->post(
-            "{$this->baseUrl}/chat/send/text",
-            (string) json_encode($message->toArray()),
+            "{$this->baseUrl}/chat/send/{$kind}",
+            (string) json_encode($payload),
             $this->jsonHeaders()
         );
 
@@ -204,14 +276,10 @@ final class Wuzapi extends AbstractProvider
             $this->reject($response, $body);
         }
 
-        $body = $this->requireSuccess(
+        return $this->requireSuccess(
             $this->requireJson($body, $response->status),
             $response->status
         );
-
-        $data = \is_array($body['data'] ?? null) ? $body['data'] : [];
-
-        return 'Sukses, messageId: ' . ($data['Id'] ?? '-');
     }
 
     /**

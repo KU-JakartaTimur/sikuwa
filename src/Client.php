@@ -199,6 +199,56 @@ final class Client
     }
 
     /**
+     * Kirim satu gambar.
+     *
+     * Bentuk pesannya seragam di semua gateway; daftar lengkap kuncinya ada di
+     * {@see Contracts\Whatsapp::sendImage()}:
+     *
+     * ```php
+     * $client->sendImage([
+     *     'destination' => '081234567890',
+     *     'image'       => 'data:image/png;base64,iVBORw0KGgo…',
+     *     'caption'     => 'Bukti transfer',
+     * ]);
+     * ```
+     *
+     * Isi `image` boleh berupa data URI, base64 telanjang, atau URL publik —
+     * kecuali di ApiMe dan wuzapi, yang menuntut isi berkasnya ikut dikirim.
+     *
+     * @param array<string,mixed> $message
+     *
+     * @throws WhatsappException
+     */
+    public function sendImage(array $message): string
+    {
+        return $this->provider()->sendImage($message);
+    }
+
+    /**
+     * Kirim satu berkas/dokumen.
+     *
+     * Sama seperti {@see self::sendImage()}, hanya kuncinya `file`. Isilah
+     * `filename`, karena itulah yang menentukan nama dan jenis berkas yang
+     * dilihat penerima:
+     *
+     * ```php
+     * $client->sendFile([
+     *     'destination' => '081234567890',
+     *     'file'        => $base64Pdf,
+     *     'filename'    => 'invoice-1209.pdf',
+     * ]);
+     * ```
+     *
+     * @param array<string,mixed> $message
+     *
+     * @throws WhatsappException
+     */
+    public function sendFile(array $message): string
+    {
+        return $this->provider()->sendFile($message);
+    }
+
+    /**
      * Apakah notifikasi diaktifkan (`WA_NOTIFICATION`).
      *
      * SDK tidak menegakkannya sendiri — ini hanya pembacaan environment yang

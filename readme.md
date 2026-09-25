@@ -111,6 +111,70 @@ tidak diisi, nilainya diambil dari [pacing](#jeda-antar-pesan-pacing); kalau
 pacing pun mati, tiap gateway memakai bawaannya sendiri — Fonnte 2 detik, OpenWA
 3 detik, sisanya tanpa jeda.
 
+### Kirim gambar & berkas
+
+Dua method terpisah, satu bentuk pesan yang sama untuk semua gateway:
+
+```php
+$client->sendImage([
+    'destination' => '081234567890',
+    'image'       => 'data:image/png;base64,iVBORw0KGgo…',
+    'caption'     => 'Bukti transfer',
+]);
+
+$client->sendFile([
+    'destination' => '081234567890',
+    'file'        => $base64Pdf,
+    'filename'    => 'invoice-1209.pdf',
+    'caption'     => 'Invoice bulan ini',
+]);
+```
+
+| Kunci | Wajib | Keterangan |
+| --- | --- | --- |
+| `destination` | ya | Sama seperti `sendMessage()` |
+| `image` / `file` | ya | Isi berkasnya. `media` diterima sebagai alias untuk keduanya |
+| `filename` | tidak | Nama yang dilihat penerima. Kosong = disusun dari jenis berkasnya (`lampiran.png`) |
+| `caption` | tidak | Teks yang menyertai berkas |
+
+Isi `image`/`file` boleh salah satu dari tiga bentuk; SDK yang menyesuaikannya ke
+bentuk yang diminta tiap gateway:
+
+- **data URI** (`data:image/png;base64,…`) — paling aman, karena jenis berkasnya
+  ikut terbawa;
+- **base64 telanjang** — jenisnya lalu ditebak dari `filename`, dan menjadi
+  `application/octet-stream` bila ekstensinya tidak dikenali;
+- **URL publik** (`https://…`) — hanya bila gateway boleh mengunduhnya sendiri.
+
+Yang menentukan sebuah berkas dikirim sebagai gambar atau dokumen adalah **jenis
+berkasnya**, bukan method yang dipanggil: `sendFile()` dengan PNG tetap terkirim
+sebagai gambar, dan `sendImage()` dengan PDF tetap terkirim sebagai dokumen.
+
+Tiap gateway menempuh jalur yang berbeda, dan itu memang sifat gateway-nya:
+
+| Gateway | Gambar | Berkas | Bentuk isi |
+| --- | --- | --- | --- |
+| Fonnte | `POST /send` | `POST /send` | multipart, byte mentah — atau kolom `url` bila sumbernya URL |
+| OpenWA | `POST /api/sessions/{id}/messages/send-image` | `…/send-document` | JSON, base64 telanjang + `mimetype` terpisah |
+| ApiMe | `POST /api/instances/{id}/messages/media` | `…/messages/document` | multipart, byte mentah |
+| Evolution API | `POST /message/sendMedia/{instance}` | sama, `mediatype=document` | JSON, base64 telanjang atau URL |
+| Wuzapi | `POST /chat/send/image` | `POST /chat/send/document` | JSON, data URI (wajib) |
+
+Empat hal yang mudah menjebak, dan sudah ditangani SDK:
+
+- **ApiMe dan Wuzapi hanya menerima isi berkasnya**, bukan URL — keduanya tidak
+  mengunduh apa pun sendiri. Menyerahkan URL ke sana melempar
+  `ConfigurationException` yang menyuruh mengunduh berkasnya lebih dulu.
+- **Evolution API menolak data URI.** Pemeriksaannya memakai `isBase64()` yang
+  tidak mengenali awalan `data:…;base64,`, jadi SDK mengirim base64 telanjang.
+  Untuk dokumen, `fileName` wajib ada — tanpa itu Evolution membalas HTTP 400.
+- **Wuzapi meminta dokumen sebagai `octet-stream`**, apa pun jenis berkas
+  aslinya. Itu bentuk yang diminta dokumentasinya, jadi jenis berkasnya tidak
+  diteruskan ke sana.
+- **Fonnte baru bisa mengirim media pada paket berbayar**
+  (super/advanced/ultra). Penolakannya datang sebagai `reason` biasa, jadi
+  pesannya muncul apa adanya di log.
+
 ### Jeda antar pesan (pacing)
 
 Mengirim beruntun dengan jeda yang seragam mudah dikenali sebagai robot. Pacing
@@ -477,8 +541,8 @@ yang sudah teruji.
 - [x] Show QR
 - [x] Send messages
 - [x] Jeda antar pesan (pacing)
-- [ ] Send Media Image
-- [ ] Send Media File
+- [x] Send Media Image
+- [x] Send Media File
 - [x] Human Being Typing
 
 ## Kredit

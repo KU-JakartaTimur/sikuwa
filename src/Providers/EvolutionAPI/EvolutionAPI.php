@@ -10,6 +10,8 @@ use Sikuwa\Whatsapp\Exceptions\ConfigurationException;
 use Sikuwa\Whatsapp\Http\HttpExecutor;
 use Sikuwa\Whatsapp\Providers\AbstractProvider;
 use Sikuwa\Whatsapp\Session;
+use Sikuwa\Whatsapp\Support\File;
+use Sikuwa\Whatsapp\Support\PhoneNumber;
 
 /**
  * Gateway Evolution API (https://github.com/evolution-foundation/evolution-api),
@@ -197,6 +199,66 @@ final class EvolutionAPI extends AbstractProvider
         }
 
         return $prepared;
+    }
+
+    /**
+     * Kirim satu berkas lewat Evolution API.
+     *
+     * Satu endpoint untuk semua jenis (`sendMedia`); yang membedakan hanya
+     * kolom `mediatype`. Evolution menerima `media` berupa URL publik atau
+     * base64, tapi **bukan** data URI: pemeriksaannya memakai `isBase64()`
+     * milik class-validator, yang tidak mengenali awalan `data:…;base64,`.
+     * Jadi isinya harus base64 telanjang. Untuk dokumen berbasis base64,
+     * `fileName` wajib diisi — tanpa itu Evolution menolak dengan HTTP 400.
+     *
+     * @throws ApiException
+     * @throws ConfigurationException
+     */
+    protected function sendMedia(string $destination, File $file, string $caption): string
+    {
+        if ($this->instanceName === '') {
+            throw new ConfigurationException('WHATSAPP_INSTANCE belum diisi di .env');
+        }
+
+        $number = str_contains($destination, '@')
+            ? $destination
+            : PhoneNumber::normalize($destination);
+
+        if ($number === '') {
+            throw new ConfigurationException("Nomor tujuan '{$destination}' tidak valid");
+        }
+
+        $payload = [
+            'number' => $number,
+            'mediatype' => $file->isImage() ? 'image' : 'document',
+            'mimetype' => $file->mime,
+        ];
+
+        if ($caption !== '') {
+            $payload['caption'] = $caption;
+        }
+
+        if ($file->isUrl()) {
+            $payload['media'] = $file->payload;
+        } else {
+            $payload['media'] = $file->base64();
+        }
+
+        // Nama berkas hanya bermakna untuk dokumen; bagi gambar Evolution
+        // memakai `mimetype` saja.
+        if (! $file->isImage()) {
+            $payload['fileName'] = $file->filename;
+        }
+
+        $body = $this->postJson(
+            "{$this->baseUrl}/message/sendMedia/" . rawurlencode($this->instanceName),
+            $payload
+        );
+
+        // Sukses mengembalikan objek pesan Baileys; id-nya ada di key.id.
+        $key = \is_array($body['key'] ?? null) ? $body['key'] : [];
+
+        return 'Sukses, messageId: ' . ($key['id'] ?? '-');
     }
 
     /** POST /message/sendText/{instanceName} */

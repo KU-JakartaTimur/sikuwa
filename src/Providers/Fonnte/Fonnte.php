@@ -9,8 +9,10 @@ use Sikuwa\Whatsapp\Exceptions\ApiException;
 use Sikuwa\Whatsapp\Exceptions\ConfigurationException;
 use Sikuwa\Whatsapp\Exceptions\NotFoundException;
 use Sikuwa\Whatsapp\Http\HttpExecutor;
+use Sikuwa\Whatsapp\Http\HttpResponse;
 use Sikuwa\Whatsapp\Providers\AbstractProvider;
 use Sikuwa\Whatsapp\Session;
+use Sikuwa\Whatsapp\Support\File;
 use Sikuwa\Whatsapp\Support\PhoneNumber;
 
 /**
@@ -256,12 +258,75 @@ final class Fonnte extends AbstractProvider
 
         $payload = $this->compose(fn (): string => (new FonnteBulkMessage($items))->toJson());
 
-        $response = $this->http->post(
-            $this->urlApi,
-            ['data' => $payload],
-            $this->authHeaders()
+        return $this->sent(
+            $this->http->post(
+                $this->urlApi,
+                ['data' => $payload],
+                $this->authHeaders()
+            )
         );
+    }
 
+    /**
+     * Kirim satu berkas ke Fonnte.
+     *
+     * Fonnte tidak punya kolom base64: berkasnya harus diunggah sebagai
+     * multipart, atau diserahkan sebagai URL publik supaya server Fonnte yang
+     * mengunduhnya. Karena itu data URI dan base64 telanjang diubah dulu
+     * menjadi byte mentah.
+     *
+     * Pengiriman media baru tersedia pada paket berbayar (super/advanced/
+     * ultra). Fonnte menolaknya lewat `reason` seperti kegagalan lain, jadi
+     * pesannya muncul apa adanya di log.
+     *
+     * @throws ApiException
+     * @throws ConfigurationException
+     */
+    protected function sendMedia(string $destination, File $file, string $caption): string
+    {
+        $target = PhoneNumber::normalize($destination);
+
+        if ($target === '') {
+            throw new ConfigurationException("Nomor tujuan '{$destination}' tidak valid");
+        }
+
+        $parts = [
+            ['name' => 'target', 'contents' => $target],
+            // `filename` hanya dipakai Fonnte untuk berkas dan audio, tapi
+            // mengirimkannya selalu aman.
+            ['name' => 'filename', 'contents' => $file->filename],
+        ];
+
+        if ($caption !== '') {
+            $parts[] = ['name' => 'message', 'contents' => $caption];
+        }
+
+        if ($file->isUrl()) {
+            $parts[] = ['name' => 'url', 'contents' => $file->payload];
+        } else {
+            $parts[] = [
+                'name' => 'file',
+                'contents' => $file->bytes(),
+                'filename' => $file->filename,
+                'headers' => ['Content-Type' => $file->mime],
+            ];
+        }
+
+        return $this->sent($this->http->postMultipart($this->urlApi, $parts, $this->authHeaders()));
+    }
+
+    /**
+     * Terjemahkan balasan Fonnte menjadi string hasil.
+     *
+     * Fonnte selalu membalas HTTP 200, bahkan saat menolak; keberhasilan
+     * sebenarnya ada di field `status`. Dipakai bersama oleh pengiriman teks
+     * dan pengiriman berkas supaya keduanya melaporkan hasil dengan kalimat
+     * yang sama.
+     *
+     * @throws ApiException
+     */
+    private function sent(HttpResponse $response): string
+    {
         $body = $this->read($response);
 
         if (! $response->isSuccess()) {

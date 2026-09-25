@@ -13,6 +13,7 @@ use Sikuwa\Whatsapp\Exceptions\WhatsappException;
 use Sikuwa\Whatsapp\Http\HttpExecutor;
 use Sikuwa\Whatsapp\Http\HttpResponse;
 use Sikuwa\Whatsapp\Session;
+use Sikuwa\Whatsapp\Support\File;
 use Sikuwa\Whatsapp\Support\Text;
 
 /**
@@ -95,6 +96,103 @@ abstract class AbstractProvider implements Whatsapp
      * @param string|null $id Sesi yang diminta QR-nya; default dari konfigurasi.
      */
     abstract public function showQr(?string $id = null): Session;
+
+    /**
+     * Kirim satu berkas ke satu tujuan.
+     *
+     * Sengaja abstrak: tiap gateway punya endpoint, bentuk body, dan cara
+     * membawa berkasnya sendiri — Fonnte dan ApiMe menuntut unggahan
+     * multipart, OpenWA dan Evolution API menerima base64 di dalam JSON,
+     * wuzapi hanya mau data URI. Yang seragam adalah cara pemanggil
+     * menyerahkan berkasnya, dan itu dirapikan di {@see Support\File}.
+     *
+     * @param string $destination Nomor tujuan, sama seperti `sendMessage()`
+     * @param File   $file        Berkas yang sudah dinormalkan
+     * @param string $caption     Teks yang menyertai berkas; boleh kosong
+     */
+    abstract protected function sendMedia(string $destination, File $file, string $caption): string;
+
+    /**
+     * Kirim satu gambar.
+     *
+     * Kunci yang dibaca: `destination` dan `image` (alias `media`), lalu
+     * opsional `filename` dan `caption`.
+     *
+     * ```php
+     * $client->sendImage([
+     *     'destination' => '081234567890',
+     *     'image'       => 'data:image/png;base64,iVBORw0KGgo…',
+     *     'caption'     => 'Bukti transfer',
+     * ]);
+     * ```
+     *
+     * @param array<string,mixed> $message
+     *
+     * @throws WhatsappException
+     */
+    public function sendImage(array $message): string
+    {
+        return $this->dispatchMedia($message, 'image');
+    }
+
+    /**
+     * Kirim satu berkas/dokumen.
+     *
+     * Kunci yang dibaca: `destination` dan `file` (alias `media`), lalu
+     * opsional `filename` dan `caption`. `filename` menentukan nama yang
+     * dilihat penerima sekaligus jenis berkasnya, jadi isilah kalau isinya
+     * base64 telanjang tanpa nama yang jelas.
+     *
+     * @param array<string,mixed> $message
+     *
+     * @throws WhatsappException
+     */
+    public function sendFile(array $message): string
+    {
+        return $this->dispatchMedia($message, 'file');
+    }
+
+    /**
+     * Normalkan pesan bermedia lalu teruskan ke gateway.
+     *
+     * `sendImage()` dan `sendFile()` sengaja hanya berbeda pada kunci yang
+     * mereka cari: yang menentukan sebuah berkas dikirim sebagai gambar atau
+     * dokumen adalah jenis berkasnya, bukan nama method yang dipanggil. Jadi
+     * `sendFile()` dengan PNG tetap terkirim sebagai gambar, dan `sendImage()`
+     * dengan PDF tetap terkirim sebagai dokumen — persis seperti yang
+     * dilakukan gateway sendiri saat memilih endpoint.
+     *
+     * @param array<string,mixed> $message
+     *
+     * @throws ConfigurationException
+     */
+    private function dispatchMedia(array $message, string $key): string
+    {
+        // Kunci `media` berlaku untuk kedua method, supaya pemanggil yang
+        // menyimpan berkasnya secara umum tidak perlu tahu mana yang dipakai.
+        $payload = $message[$key] ?? $message['media'] ?? null;
+
+        if (! \is_string($payload) || trim($payload) === '') {
+            throw new ConfigurationException(
+                "Gagal menyusun berkas: kunci '{$key}' harus berisi data URI, base64, atau URL publik"
+            );
+        }
+
+        $destination = $message['destination'] ?? null;
+
+        if (! \is_string($destination) || trim($destination) === '') {
+            throw new ConfigurationException("Gagal menyusun berkas: kunci 'destination' belum diisi");
+        }
+
+        $filename = $message['filename'] ?? '';
+        $caption = $message['caption'] ?? '';
+
+        return $this->sendMedia(
+            trim($destination),
+            File::from($payload, \is_string($filename) ? $filename : ''),
+            \is_string($caption) ? $caption : ''
+        );
+    }
 
     public function config(): Config
     {
@@ -324,6 +422,28 @@ abstract class AbstractProvider implements Whatsapp
         $body = $payload === null ? '' : (string) json_encode($payload);
 
         return $this->decode($this->http->post($url, $body, $this->jsonHeaders($extraHeaders)));
+    }
+
+    /**
+     * POST multipart, lalu baca + tolak + wajib-JSON dalam satu langkah.
+     *
+     * Dipakai gateway yang menuntut berkasnya diunggah sebagai biner —
+     * Fonnte dan ApiMe. `Content-Type` sengaja tidak ikut diisi: hanya
+     * Guzzle yang tahu `boundary` milik body ini.
+     *
+     * @param array<int,array{name:string, contents:string, filename?:string,
+     *                        headers?:array<string,string>}> $parts
+     * @param array<string,string> $extraHeaders
+     * @return array<string,mixed> Body terdecode; tidak pernah null.
+     *
+     * @throws TimeoutException
+     * @throws ApiException
+     */
+    protected function postMultipartJson(string $url, array $parts, array $extraHeaders = []): array
+    {
+        return $this->decode(
+            $this->http->postMultipart($url, $parts, array_merge($this->authHeaders(), $extraHeaders))
+        );
     }
 
     /**
