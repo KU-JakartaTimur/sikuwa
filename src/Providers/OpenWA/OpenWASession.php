@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Sikuwa\Whatsapp\Providers\OpenWA;
 
 use Sikuwa\Whatsapp\Session;
+use Sikuwa\Whatsapp\Support\Envelope;
 use Sikuwa\Whatsapp\Support\Qr;
 use Sikuwa\Whatsapp\Support\Text;
 
@@ -59,7 +60,7 @@ final class OpenWASession
      */
     public static function fromResponse(array $body, string $fallbackId = ''): Session
     {
-        $data = self::unwrap($body);
+        $data = Envelope::unwrap($body);
         $status = strtoupper(Text::of($data['status'] ?? null));
 
         return new Session(
@@ -74,17 +75,4 @@ final class OpenWASession
         );
     }
 
-    /**
-     * Sebagian versi OpenWA membungkus balasan sebagai `{success, data}`, yang
-     * lain mengembalikan objeknya langsung. Keduanya diterima.
-     *
-     * @param array<string,mixed> $body
-     * @return array<string,mixed>
-     */
-    private static function unwrap(array $body): array
-    {
-        $data = $body['data'] ?? null;
-
-        return \is_array($data) ? $data : $body;
-    }
 }

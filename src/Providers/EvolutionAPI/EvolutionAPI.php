@@ -11,7 +11,6 @@ use Sikuwa\Whatsapp\Http\HttpExecutor;
 use Sikuwa\Whatsapp\Providers\AbstractProvider;
 use Sikuwa\Whatsapp\Session;
 use Sikuwa\Whatsapp\Support\File;
-use Sikuwa\Whatsapp\Support\PhoneNumber;
 use Sikuwa\Whatsapp\Support\Presence;
 
 /**
@@ -95,11 +94,7 @@ final class EvolutionAPI extends AbstractProvider
      */
     public function checkSession(?string $id = null): Session
     {
-        $instanceName = $id ?? $this->instanceName;
-
-        if ($instanceName === '') {
-            throw new ConfigurationException('WHATSAPP_INSTANCE belum diisi di .env');
-        }
+        $instanceName = $this->requireConfigured($id ?? $this->instanceName, 'WHATSAPP_INSTANCE');
 
         return EvolutionAPISession::fromResponse(
             $this->getJson("{$this->baseUrl}/instance/connectionState/" . rawurlencode($instanceName)),
@@ -121,11 +116,7 @@ final class EvolutionAPI extends AbstractProvider
      */
     public function showQr(?string $id = null): Session
     {
-        $instanceName = $id ?? $this->instanceName;
-
-        if ($instanceName === '') {
-            throw new ConfigurationException('WHATSAPP_INSTANCE belum diisi di .env');
-        }
+        $instanceName = $this->requireConfigured($id ?? $this->instanceName, 'WHATSAPP_INSTANCE');
 
         return EvolutionAPISession::fromResponse(
             $this->getJson("{$this->baseUrl}/instance/connect/" . rawurlencode($instanceName)),
@@ -150,30 +141,11 @@ final class EvolutionAPI extends AbstractProvider
      */
     public function sendMessage(array|string $message): string
     {
-        $items = $this->plan($message);
-
-        if ($items === []) {
-            return 'Tidak ada pesan untuk dikirim';
-        }
-
-        if ($this->instanceName === '') {
-            throw new ConfigurationException('WHATSAPP_INSTANCE belum diisi di .env');
-        }
-
-        $prepared = $this->compose(fn (): array => $this->build($items));
-
-        // Jeda sengaja tidak diteruskan ke sendSequentially(): nilainya sudah
-        // dititipkan ke server, jadi menunggu di klien juga berarti dua kali.
-        if (\count($prepared) === 1) {
-            $this->announceTyping($prepared[0]);
-
-            return $this->sendText($prepared[0]['message']);
-        }
-
-        return $this->sendSequentially(
-            $prepared,
-            fn (EvolutionAPIMessage $m): string => $this->sendText($m),
-            static fn (EvolutionAPIMessage $m): string => $m->number
+        return $this->sendIndividually(
+            $message,
+            fn (array $items): array => $this->build($items),
+            fn (EvolutionAPIMessage $message): string => $this->sendText($message),
+            static fn (EvolutionAPIMessage $message): string => $message->number
         );
     }
 
@@ -185,30 +157,20 @@ final class EvolutionAPI extends AbstractProvider
      */
     private function build(array $items): array
     {
-        $prepared = [];
+        $this->requireConfigured($this->instanceName, 'WHATSAPP_INSTANCE');
 
-        foreach ($items as $i => $item) {
-            $message = new EvolutionAPIMessage(
+        return $this->buildItems(
+            $items,
+            static fn (array $item): EvolutionAPIMessage => new EvolutionAPIMessage(
                 $item['destination'],
                 $item['message'],
-                $item['delay'] ?? 0
-            );
-
-            if ($message->number === '') {
-                throw new ConfigurationException("Pesan ke-{$i} tidak punya nomor tujuan yang valid");
-            }
-
+                (int) ($item['delay'] ?? 0)
+            ),
+            static fn (EvolutionAPIMessage $message): string => $message->number,
             // Jeda dititipkan ke server lewat payload, jadi klien tidak perlu
             // ikut menunggu di antara request.
-            $prepared[] = [
-                'message' => $message,
-                'delay' => 0,
-                'destination' => $item['destination'],
-                'typing' => $item['typing'],
-            ];
-        }
-
-        return $prepared;
+            delayOnServer: true
+        );
     }
 
     /**
@@ -226,17 +188,9 @@ final class EvolutionAPI extends AbstractProvider
      */
     protected function sendMedia(string $destination, File $file, string $caption): string
     {
-        if ($this->instanceName === '') {
-            throw new ConfigurationException('WHATSAPP_INSTANCE belum diisi di .env');
-        }
+        $this->requireConfigured($this->instanceName, 'WHATSAPP_INSTANCE');
 
-        $number = str_contains($destination, '@')
-            ? $destination
-            : PhoneNumber::normalize($destination);
-
-        if ($number === '') {
-            throw new ConfigurationException("Nomor tujuan '{$destination}' tidak valid");
-        }
+        $number = $this->target($destination);
 
         $payload = [
             'number' => $number,
@@ -304,17 +258,9 @@ final class EvolutionAPI extends AbstractProvider
      */
     protected function sendPresence(string $destination, Presence $presence): string
     {
-        if ($this->instanceName === '') {
-            throw new ConfigurationException('WHATSAPP_INSTANCE belum diisi di .env');
-        }
+        $this->requireConfigured($this->instanceName, 'WHATSAPP_INSTANCE');
 
-        $number = str_contains($destination, '@')
-            ? $destination
-            : PhoneNumber::normalize($destination);
-
-        if ($number === '') {
-            throw new ConfigurationException("Nomor tujuan '{$destination}' tidak valid");
-        }
+        $number = $this->target($destination);
 
         $this->postJson(
             "{$this->baseUrl}/chat/sendPresence/" . rawurlencode($this->instanceName),

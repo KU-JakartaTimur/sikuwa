@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Sikuwa\Whatsapp\Providers\Wuzapi;
 
 use Sikuwa\Whatsapp\Session;
+use Sikuwa\Whatsapp\Support\Envelope;
 use Sikuwa\Whatsapp\Support\Text;
 
 /**
@@ -56,7 +57,7 @@ final class WuzapiSession
      */
     public static function fromConnect(array $body): Session
     {
-        $data = self::data($body);
+        $data = Envelope::data($body);
         $connected = ($body['success'] ?? false) === true;
 
         return new Session(
@@ -80,7 +81,7 @@ final class WuzapiSession
      */
     public static function fromStatus(array $body): Session
     {
-        $data = self::data($body);
+        $data = Envelope::data($body);
         $connected = ($data['Connected'] ?? false) === true;
         $loggedIn = ($data['LoggedIn'] ?? false) === true;
 
@@ -96,14 +97,4 @@ final class WuzapiSession
         );
     }
 
-    /**
-     * @param array<string,mixed> $body
-     * @return array<string,mixed>
-     */
-    private static function data(array $body): array
-    {
-        $data = $body['data'] ?? null;
-
-        return \is_array($data) ? $data : [];
-    }
 }

@@ -15,6 +15,7 @@ use Sikuwa\Whatsapp\Providers\EvolutionAPI\EvolutionAPI;
 use Sikuwa\Whatsapp\Providers\Fonnte\Fonnte;
 use Sikuwa\Whatsapp\Providers\OpenWA\OpenWA;
 use Sikuwa\Whatsapp\Providers\Wuzapi\Wuzapi;
+use Sikuwa\Whatsapp\Providers\Wwebjs\Wwebjs;
 
 /**
  * Titik masuk SDK — pemegang konfigurasi, transport, dan pemilihan gateway.
@@ -57,6 +58,7 @@ final class Client
         'ApiMe' => ApiMe::class,
         'EvolutionAPI' => EvolutionAPI::class,
         'Wuzapi' => Wuzapi::class,
+        'Wwebjs' => Wwebjs::class,
     ];
 
     private Config $config;

@@ -20,6 +20,7 @@ membutuhkan PHP 8.1+.
 | ApiMe | Self-hosted | Go / WhatsMeow | <https://github.com/open-apime/apime> |
 | Evolution API | Self-hosted | Node.js / Baileys | <https://github.com/evolution-foundation/evolution-api> |
 | Wuzapi | Self-hosted | Go / WhatsMeow | <https://github.com/asternic/wuzapi> |
+| Wwebjs | Self-hosted | Node.js / whatsapp-web.js | <https://github.com/avoylenko/wwebjs-api> |
 
 ## Instalasi
 
@@ -159,8 +160,9 @@ Tiap gateway menempuh jalur yang berbeda, dan itu memang sifat gateway-nya:
 | ApiMe | `POST /api/instances/{id}/messages/media` | `…/messages/document` | multipart, byte mentah |
 | Evolution API | `POST /message/sendMedia/{instance}` | sama, `mediatype=document` | JSON, base64 telanjang atau URL |
 | Wuzapi | `POST /chat/send/image` | `POST /chat/send/document` | JSON, data URI (wajib) |
+| Wwebjs | `POST /client/sendMessage/{id}` | sama, `contentType=MessageMedia` | JSON, base64 telanjang — atau `MessageMediaFromURL` bila sumbernya URL |
 
-Empat hal yang mudah menjebak, dan sudah ditangani SDK:
+Lima hal yang mudah menjebak, dan sudah ditangani SDK:
 
 - **ApiMe dan Wuzapi hanya menerima isi berkasnya**, bukan URL — keduanya tidak
   mengunduh apa pun sendiri. Menyerahkan URL ke sana melempar
@@ -174,6 +176,10 @@ Empat hal yang mudah menjebak, dan sudah ditangani SDK:
 - **Fonnte baru bisa mengirim media pada paket berbayar**
   (super/advanced/ultra). Penolakannya datang sebagai `reason` biasa, jadi
   pesannya muncul apa adanya di log.
+- **Wwebjs memisahkan caption dari berkasnya.** Caption tidak ikut masuk ke
+  objek berkas: ia dititipkan di `options.caption`, sedangkan isinya di
+  `content`. SDK yang menyusun keduanya, jadi satu berkas berteks pengantar
+  tetap satu request.
 
 ### Indikator "sedang mengetik"
 
@@ -212,20 +218,25 @@ menolaknya lebih dulu dengan `ConfigurationException`.
 | ApiMe | `POST /api/instances/{id}/whatsapp/presence` | `composing` \| `recording` \| `paused` | diabaikan |
 | Evolution API | `POST /chat/sendPresence/{instance}` | `composing` \| `recording` \| `paused` | dipakai, satuan milidetik |
 | Wuzapi | `POST /chat/presence` | `composing` + `Media: audio` \| `paused` | diabaikan |
+| Wwebjs | `POST /chat/sendStateTyping` · `…/sendStateRecording` · `…/clearState` | endpoint berbeda per keadaan | diabaikan; indikatornya bertahan ~25 detik di server |
 
-Tiga hal yang mudah menjebak, dan sudah ditangani SDK:
+Empat hal yang mudah menjebak, dan sudah ditangani SDK:
 
 - **Evolution API ikut menahan pemanggil.** Servernya yang mengirim
   `composing`, menunggu `delay`, lalu mengirim `paused` — jadi panggilan ini
   **memblokir** selama `duration`. Durasi di atas 20 detik dipotong Evolution
-  menjadi beberapa siklus. Ini satu-satunya gateway yang indikatornya hilang
-  sendiri; empat lainnya menyimpan statusnya sampai dihapus dengan `paused`
-  atau sampai ada pesan yang benar-benar terkirim.
+  menjadi beberapa siklus. Ini satu-satunya gateway yang membersihkan
+  indikatornya sendiri di dalam satu request; yang lain menyimpan statusnya
+  sampai dihapus dengan `paused` atau sampai ada pesan yang benar-benar
+  terkirim — sedangkan indikator Wwebjs kedaluwarsa sendiri setelah ~25 detik.
 - **Fonnte tidak punya indikator merekam suara**, hanya indikator mengetik.
   Meminta `recording` di sana melempar `ConfigurationException` — bukan
   diam-diam berubah menjadi indikator mengetik.
 - **Wuzapi tidak punya keadaan `recording`.** Merekam suara dikirim sebagai
   `composing` dengan `Media` berisi `audio`, dan itu yang disusun SDK.
+- **Wwebjs memakai endpoint berbeda untuk tiap keadaan**, bukan satu endpoint
+  dengan kolom status. Karena tidak ada kolom durasi, `duration` di sana hanya
+  menentukan berapa lama SDK menunggu sebelum pesannya dikirim.
 
 ### Jeda antar pesan (pacing)
 
@@ -283,7 +294,7 @@ sifat gateway-nya:
 | Fonnte | Server, lewat kolom `delay` tiap pesan |
 | OpenWA | Server, lewat `delayBetweenMessages` — satu angka untuk seluruh batch, diambil dari jeda sebelum pesan kedua |
 | Evolution API | Server, lewat kolom `delay` payload (dalam milidetik) |
-| ApiMe, Wuzapi | SDK, dengan `sleep()` di antara request |
+| ApiMe, Wuzapi, Wwebjs | SDK, dengan `sleep()` di antara request |
 
 Karena jedanya dititipkan ke server, Fonnte, OpenWA, dan Evolution API tidak
 menahan klien dua kali. OpenWA juga menambahkan pengacakan di sisinya sendiri
@@ -353,7 +364,7 @@ gateway-nya:
 | Gateway | Yang terjadi |
 | --- | --- |
 | Evolution API | Servernya sudah menunggu dan menghapus indikatornya sendiri, jadi SDK **tidak** menunggu lagi — kalau tidak, pemanggil menunggu dua kali |
-| ApiMe, Wuzapi, OpenWA, Fonnte | Indikator hanya menyimpan status, jadi SDK yang menghabiskan durasinya |
+| ApiMe, Wuzapi, OpenWA, Fonnte, Wwebjs | Indikator hanya menyimpan status, jadi SDK yang menghabiskan durasinya |
 
 Tiga hal yang mudah menjebak, dan sudah ditangani SDK:
 
@@ -362,8 +373,8 @@ Tiga hal yang mudah menjebak, dan sudah ditangani SDK:
   hanya indikator untuk **tujuan pesan pertama**. Memunculkan untuk semua tujuan
   sekaligus justru membuat penerima terakhir melihat "sedang mengetik" lalu diam
   lama sebelum pesannya datang — lebih buruk daripada tanpa indikator. ApiMe,
-  Evolution API, dan wuzapi mengirim satu per satu, jadi tiap pesan dapat
-  indikatornya sendiri.
+  Evolution API, wuzapi, dan Wwebjs mengirim satu per satu, jadi tiap pesan
+  dapat indikatornya sendiri.
 - **Berkas tidak didahului indikator.** `sendImage()` dan `sendFile()` tidak
   melewati indikator "sedang mengetik" — yang dikirim bukan ketikan, dan
   mengatakannya akan berbohong. Pakai `sendTyping()` sendiri kalau memang mau.
@@ -424,9 +435,9 @@ $baru = $client->createSession(['name' => 'Notifikasi Sekolah']);
 echo $baru->id;
 ```
 
-Gateway menyebutnya berbeda-beda — OpenWA "session", ApiMe dan Evolution API
-"instance", wuzapi dan Fonnte "device" — tetapi semuanya mengembalikan
-`Sikuwa\Whatsapp\Session` yang sama:
+Gateway menyebutnya berbeda-beda — OpenWA dan Wwebjs "session", ApiMe dan
+Evolution API "instance", wuzapi dan Fonnte "device" — tetapi semuanya
+mengembalikan `Sikuwa\Whatsapp\Session` yang sama:
 
 | Properti | Isi |
 | --- | --- |
@@ -487,6 +498,7 @@ bukan sebagai exception:
 | Fonnte | `{"status":false,"reason":"device already connect"}` |
 | Wuzapi | error `already logged in` |
 | OpenWA | HTTP 400 — sebabnya bercampur dengan sesi yang belum `qr_ready`, jadi tetap dilempar |
+| Wwebjs | JSON `qr code not ready or already scanned` — dibedakan dengan membaca status sesi |
 
 Karena itu `showQr()` aman dipanggil tanpa memeriksa `checkSession()` lebih
 dulu:
@@ -517,6 +529,11 @@ Catatan per gateway:
   token seperti `createSession()`/`checkSession()`. `showQr('08123456789')`
   mengirim nomornya sebagai `whatsapp`. Mode `type=code` (kode pairing) belum
   didukung.
+- **Wwebjs** — QR-nya diambil dari `GET /session/qr/{id}/image`, yang mengirim
+  PNG biner; SDK yang membungkusnya menjadi data URI. Endpoint itu menjawab JSON
+  saat QR-nya tidak ada, dan sebabnya bisa dua hal sekaligus — session belum
+  selesai dimuat, atau QR-nya sudah dipindai. Yang kedua dibedakan dengan
+  menanyakan `GET /session/status/{id}` sekali.
 
 | Gateway | Membuat sesi | Memeriksa sesi | QR sesi |
 | --- | --- | --- | --- |
@@ -525,12 +542,13 @@ Catatan per gateway:
 | Evolution API | `POST /instance/create` — `instanceName`, `qrcode`, `webhook` | `GET /instance/connectionState/{instance}` | `GET /instance/connect/{instance}` |
 | Wuzapi | `POST /session/connect` — `subscribe`, `immediate` | `GET /session/status` | `GET /session/qr` |
 | Fonnte | `POST /add-device` — `name`, `device`, `autoread` | `POST /get-devices` | `POST /qr` |
+| Wwebjs | `POST /session/start/{id}` — `id`, `webhookUrl` | `GET /session/status/{id}` | `GET /session/qr/{id}/image` |
 
 Catatan:
 
 - **Sesi baru biasanya belum tersambung.** OpenWA membuatnya `INITIALIZING`,
-  Evolution API `created`, Fonnte `created`. Ambil QR-nya dengan `showQr()`,
-  lalu pantau dengan `checkSession()`.
+  Evolution API `created`, Fonnte `created`, Wwebjs `starting`. Ambil QR-nya
+  dengan `showQr()`, lalu pantau dengan `checkSession()`.
 - **wuzapi tidak mengenal id sesi** — token yang terpasang sudah menentukan
   sesinya, jadi `createSession()` di sana berarti *menyambungkan* sesi dan
   `checkSession($id)` mengabaikan argumennya. Yang menandakan sesi siap dipakai
@@ -555,6 +573,11 @@ Catatan:
   dashboard atau skrip admin.
 - **Nama instance Evolution API hanya boleh huruf kecil dan angka.** SDK
   menolaknya lebih awal dengan pesan yang jelas, bukan meneruskan HTTP 400.
+- **Nama session Wwebjs hanya boleh huruf, angka, garis bawah, dan tanda
+  minus**; SDK menolaknya lebih awal, bukan meneruskan HTTP 422 dari
+  middleware-nya. `createSession()` di sana juga **menunggu Chromium selesai
+  dimuat** — bisa mendekati `WHATSAPP_TIMEOUT` bawaan (10 detik), jadi naikkan
+  timeout kalau sering berakhir `TimeoutException`.
 
 ## Konfigurasi
 
@@ -568,7 +591,7 @@ Lihat [`.env.example`](.env.example). Ringkasnya:
 | `WHATSAPP_TOKEN` | Token umum, dipakai bila token khusus gateway tidak ada. **Tidak dihitung mode `Auto`** |
 | `WHATSAPP_URL_<Provider>` | Base URL per gateway. **Ini yang sebaiknya dipakai** untuk self-hosted |
 | `WHATSAPP_URL` | Base URL cadangan bila kunci per-provider kosong. **Diabaikan Fonnte** |
-| `WHATSAPP_SESSION` | Khusus OpenWA. Juga id bawaan `createSession()`/`checkSession()` |
+| `WHATSAPP_SESSION` | Khusus OpenWA dan Wwebjs. Juga id bawaan `createSession()`/`checkSession()` |
 | `WHATSAPP_INSTANCE` | Khusus ApiMe dan Evolution API. Juga nama bawaan `createSession()` |
 | `WHATSAPP_ACCOUNT_TOKEN` | Khusus Fonnte Device API (`add-device`, `get-devices`). Bukan token perangkat |
 | `WHATSAPP_TIMEOUT` | Batas waktu request, detik (1–60, default 10) |
@@ -602,8 +625,8 @@ Urutan pembacaannya: kunci per-provider → `url` yang diberikan eksplisit →
 
 Nilai default bila semuanya dikosongkan: OpenWA `https://openwa.whatsapp.com`,
 ApiMe `https://api-me.whatsapp.com`, Evolution API
-`https://evolution-api.whatsapp.com`, Wuzapi `https://wuzapi.whatsapp.com`.
-Fonnte punya endpoint tetap sendiri.
+`https://evolution-api.whatsapp.com`, Wuzapi `https://wuzapi.whatsapp.com`,
+Wwebjs `https://wwebjs.whatsapp.com`. Fonnte punya endpoint tetap sendiri.
 
 ### Catatan per gateway
 
@@ -628,6 +651,11 @@ Fonnte punya endpoint tetap sendiri.
 - **Wuzapi** — tidak butuh instance: tokennya sendiri yang menentukan sesi.
   Auth memakai header `Token`, bukan `Authorization` seperti yang tertulis di
   README wuzapi.
+- **Wwebjs** — butuh `WHATSAPP_SESSION`. Auth memakai header `x-api-key`, dan
+  **API key-nya opsional**: selama `API_KEY` tidak diisi di sisi server, semua
+  endpoint terbuka. Pengiriman menuntut session yang sudah `CONNECTED`; selama
+  belum, middleware-nya membalas HTTP 404 — dan SDK menerjemahkannya menjadi
+  petunjuk yang jelas, bukan "Not Found" apa adanya.
 
 ## Error
 
@@ -647,7 +675,7 @@ Semua error melempar subclass dari `Sikuwa\Whatsapp\Exceptions\WhatsappException
 | `TimeoutException` | Request melewati `WHATSAPP_TIMEOUT` |
 
 Pengiriman massal ke gateway tanpa endpoint batch (ApiMe, Evolution API,
-wuzapi) mengirim satu per satu. Kegagalan satu nomor tidak menghentikan
+wuzapi, Wwebjs) mengirim satu per satu. Kegagalan satu nomor tidak menghentikan
 sisanya; semuanya dikumpulkan lalu dilempar sebagai satu `ApiException`, jadi
 pemanggil melihat gambaran lengkapnya:
 
@@ -677,6 +705,7 @@ yang sudah teruji.
 
 ## Feature
 
+- [x] Enam gateway: Fonnte, OpenWA, ApiMe, Evolution API, Wuzapi, Wwebjs
 - [x] Check Session
 - [x] Create sessions
 - [x] Show QR
@@ -689,7 +718,6 @@ yang sudah teruji.
 ## Rencana Pengembangan
 
 - [ ] Menambahkan Gateway [Baileys API](https://github.com/rsuppersahabatan/baileys-api)
-- [ ] Menambahkan Gateway [Wwebjs API](https://github.com/avoylenko/wwebjs-api)
 
 ## Kredit
 

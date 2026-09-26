@@ -11,7 +11,6 @@ use Sikuwa\Whatsapp\Http\HttpExecutor;
 use Sikuwa\Whatsapp\Providers\AbstractProvider;
 use Sikuwa\Whatsapp\Session;
 use Sikuwa\Whatsapp\Support\File;
-use Sikuwa\Whatsapp\Support\PhoneNumber;
 use Sikuwa\Whatsapp\Support\Presence;
 
 /**
@@ -150,24 +149,11 @@ final class Wuzapi extends AbstractProvider
      */
     public function sendMessage(array|string $message): string
     {
-        $items = $this->plan($message);
-
-        if ($items === []) {
-            return 'Tidak ada pesan untuk dikirim';
-        }
-
-        $prepared = $this->compose(fn (): array => $this->build($items));
-
-        if (\count($prepared) === 1) {
-            $this->announceTyping($prepared[0]);
-
-            return $this->sendText($prepared[0]['message']);
-        }
-
-        return $this->sendSequentially(
-            $prepared,
-            fn (WuzapiMessage $m): string => $this->sendText($m),
-            static fn (WuzapiMessage $m): string => $m->phone
+        return $this->sendIndividually(
+            $message,
+            fn (array $items): array => $this->build($items),
+            fn (WuzapiMessage $message): string => $this->sendText($message),
+            static fn (WuzapiMessage $message): string => $message->phone
         );
     }
 
@@ -179,26 +165,11 @@ final class Wuzapi extends AbstractProvider
      */
     private function build(array $items): array
     {
-        $prepared = [];
-
-        foreach ($items as $i => $item) {
-            $message = new WuzapiMessage($item['destination'], $item['message']);
-
-            if ($message->phone === '') {
-                throw new ConfigurationException("Pesan ke-{$i} tidak punya nomor tujuan yang valid");
-            }
-
-            // `delay` dibiarkan null supaya sendSequentially() bisa mengisinya
-            // dari pacing; angka 0 tetap berarti "tanpa jeda".
-            $prepared[] = [
-                'message' => $message,
-                'delay' => $item['delay'],
-                'destination' => $item['destination'],
-                'typing' => $item['typing'],
-            ];
-        }
-
-        return $prepared;
+        return $this->buildItems(
+            $items,
+            static fn (array $item): WuzapiMessage => new WuzapiMessage($item['destination'], $item['message']),
+            static fn (WuzapiMessage $message): string => $message->phone
+        );
     }
 
     /**
@@ -213,13 +184,7 @@ final class Wuzapi extends AbstractProvider
      */
     protected function sendPresence(string $destination, Presence $presence): string
     {
-        $phone = str_contains($destination, '@')
-            ? $destination
-            : PhoneNumber::normalize($destination);
-
-        if ($phone === '') {
-            throw new ConfigurationException("Nomor tujuan '{$destination}' tidak valid");
-        }
+        $phone = $this->target($destination);
 
         $this->postChat('chat/presence', [
             'Phone' => $phone,
@@ -260,13 +225,7 @@ final class Wuzapi extends AbstractProvider
             );
         }
 
-        $phone = str_contains($destination, '@')
-            ? $destination
-            : PhoneNumber::normalize($destination);
-
-        if ($phone === '') {
-            throw new ConfigurationException("Nomor tujuan '{$destination}' tidak valid");
-        }
+        $phone = $this->target($destination);
 
         if ($file->isImage()) {
             $payload = ['Phone' => $phone, 'Image' => $file->dataUri()];

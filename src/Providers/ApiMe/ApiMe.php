@@ -11,7 +11,6 @@ use Sikuwa\Whatsapp\Http\HttpExecutor;
 use Sikuwa\Whatsapp\Providers\AbstractProvider;
 use Sikuwa\Whatsapp\Session;
 use Sikuwa\Whatsapp\Support\File;
-use Sikuwa\Whatsapp\Support\PhoneNumber;
 use Sikuwa\Whatsapp\Support\Presence;
 
 /**
@@ -102,11 +101,7 @@ final class ApiMe extends AbstractProvider
      */
     public function checkSession(?string $id = null): Session
     {
-        $instanceId = $id ?? $this->instanceId;
-
-        if ($instanceId === '') {
-            throw new ConfigurationException('WHATSAPP_INSTANCE belum diisi di .env');
-        }
+        $instanceId = $this->requireConfigured($id ?? $this->instanceId, 'WHATSAPP_INSTANCE');
 
         return ApiMeSession::fromResponse(
             $this->getJson("{$this->baseUrl}/api/instances/" . rawurlencode($instanceId)),
@@ -127,11 +122,7 @@ final class ApiMe extends AbstractProvider
      */
     public function showQr(?string $id = null): Session
     {
-        $instanceId = $id ?? $this->instanceId;
-
-        if ($instanceId === '') {
-            throw new ConfigurationException('WHATSAPP_INSTANCE belum diisi di .env');
-        }
+        $instanceId = $this->requireConfigured($id ?? $this->instanceId, 'WHATSAPP_INSTANCE');
 
         return ApiMeShowQr::fromResponse(
             $this->getJson("{$this->baseUrl}/api/instances/" . rawurlencode($instanceId) . '/qr'),
@@ -155,26 +146,9 @@ final class ApiMe extends AbstractProvider
      */
     public function sendMessage(array|string $message): string
     {
-        $items = $this->plan($message);
-
-        if ($items === []) {
-            return 'Tidak ada pesan untuk dikirim';
-        }
-
-        if ($this->instanceId === '') {
-            throw new ConfigurationException('WHATSAPP_INSTANCE belum diisi di .env');
-        }
-
-        $prepared = $this->compose(fn (): array => $this->build($items));
-
-        if (\count($prepared) === 1) {
-            $this->announceTyping($prepared[0]);
-
-            return $this->sendText($prepared[0]['message']);
-        }
-
-        return $this->sendSequentially(
-            $prepared,
+        return $this->sendIndividually(
+            $message,
+            fn (array $items): array => $this->build($items),
             fn (ApiMeMessage $message): string => $this->sendText($message),
             static fn (ApiMeMessage $message): string => $message->to
         );
@@ -188,26 +162,13 @@ final class ApiMe extends AbstractProvider
      */
     private function build(array $items): array
     {
-        $prepared = [];
+        $this->requireConfigured($this->instanceId, 'WHATSAPP_INSTANCE');
 
-        foreach ($items as $i => $item) {
-            $message = new ApiMeMessage($item['destination'], $item['message']);
-
-            if ($message->to === '') {
-                throw new ConfigurationException("Pesan ke-{$i} tidak punya nomor tujuan yang valid");
-            }
-
-            // `delay` dibiarkan null supaya sendSequentially() bisa mengisinya
-            // dari pacing; angka 0 tetap berarti "tanpa jeda".
-            $prepared[] = [
-                'message' => $message,
-                'delay' => $item['delay'],
-                'destination' => $item['destination'],
-                'typing' => $item['typing'],
-            ];
-        }
-
-        return $prepared;
+        return $this->buildItems(
+            $items,
+            static fn (array $item): ApiMeMessage => new ApiMeMessage($item['destination'], $item['message']),
+            static fn (ApiMeMessage $message): string => $message->to
+        );
     }
 
     /**
@@ -226,9 +187,7 @@ final class ApiMe extends AbstractProvider
      */
     protected function sendMedia(string $destination, File $file, string $caption): string
     {
-        if ($this->instanceId === '') {
-            throw new ConfigurationException('WHATSAPP_INSTANCE belum diisi di .env');
-        }
+        $this->requireConfigured($this->instanceId, 'WHATSAPP_INSTANCE');
 
         if ($file->isUrl()) {
             throw new ConfigurationException(
@@ -237,13 +196,7 @@ final class ApiMe extends AbstractProvider
             );
         }
 
-        $to = str_contains($destination, '@')
-            ? $destination
-            : PhoneNumber::normalize($destination);
-
-        if ($to === '') {
-            throw new ConfigurationException("Nomor tujuan '{$destination}' tidak valid");
-        }
+        $to = $this->target($destination);
 
         if ($file->isImage()) {
             $endpoint = 'messages/media';
@@ -294,17 +247,9 @@ final class ApiMe extends AbstractProvider
      */
     protected function sendPresence(string $destination, Presence $presence): string
     {
-        if ($this->instanceId === '') {
-            throw new ConfigurationException('WHATSAPP_INSTANCE belum diisi di .env');
-        }
+        $this->requireConfigured($this->instanceId, 'WHATSAPP_INSTANCE');
 
-        $to = str_contains($destination, '@')
-            ? $destination
-            : PhoneNumber::normalize($destination);
-
-        if ($to === '') {
-            throw new ConfigurationException("Nomor tujuan '{$destination}' tidak valid");
-        }
+        $to = $this->target($destination);
 
         $state = match (true) {
             $presence->isRecording() => 'recording',

@@ -92,11 +92,7 @@ final class OpenWA extends AbstractProvider
      */
     public function checkSession(?string $id = null): Session
     {
-        $sessionId = $id ?? $this->sessionId;
-
-        if ($sessionId === '') {
-            throw new ConfigurationException('WHATSAPP_SESSION belum diisi di .env');
-        }
+        $sessionId = $this->requireConfigured($id ?? $this->sessionId, 'WHATSAPP_SESSION');
 
         return OpenWASession::fromResponse(
             $this->getJson("{$this->baseUrl}/api/sessions/" . rawurlencode($sessionId)),
@@ -119,11 +115,7 @@ final class OpenWA extends AbstractProvider
      */
     public function showQr(?string $id = null): Session
     {
-        $sessionId = $id ?? $this->sessionId;
-
-        if ($sessionId === '') {
-            throw new ConfigurationException('WHATSAPP_SESSION belum diisi di .env');
-        }
+        $sessionId = $this->requireConfigured($id ?? $this->sessionId, 'WHATSAPP_SESSION');
 
         return OpenWAShowQr::fromResponse(
             $this->getJson("{$this->baseUrl}/api/sessions/" . rawurlencode($sessionId) . '/qr'),
@@ -154,9 +146,7 @@ final class OpenWA extends AbstractProvider
             return 'Tidak ada pesan untuk dikirim';
         }
 
-        if ($this->sessionId === '') {
-            throw new ConfigurationException('WHATSAPP_SESSION belum diisi di .env');
-        }
+        $this->requireConfigured($this->sessionId, 'WHATSAPP_SESSION');
 
         // OpenWA hanya menerima satu angka jeda untuk seluruh batch, bukan jeda
         // per pesan. Yang paling mewakili adalah jeda pesan kedua: jeda pertama
@@ -199,9 +189,7 @@ final class OpenWA extends AbstractProvider
      */
     protected function sendMedia(string $destination, File $file, string $caption): string
     {
-        if ($this->sessionId === '') {
-            throw new ConfigurationException('WHATSAPP_SESSION belum diisi di .env');
-        }
+        $this->requireConfigured($this->sessionId, 'WHATSAPP_SESSION');
 
         // OpenWA menolak nomor mentah: `chatId` wajib berupa JID lengkap.
         $chatId = PhoneNumber::toWid($destination);
@@ -250,9 +238,7 @@ final class OpenWA extends AbstractProvider
      */
     protected function sendPresence(string $destination, Presence $presence): string
     {
-        if ($this->sessionId === '') {
-            throw new ConfigurationException('WHATSAPP_SESSION belum diisi di .env');
-        }
+        $this->requireConfigured($this->sessionId, 'WHATSAPP_SESSION');
 
         // Sama seperti pengiriman berkas: `chatId` wajib berupa JID lengkap,
         // dan `toWid()` membentuk "@c.us" begitu nomornya kosong.

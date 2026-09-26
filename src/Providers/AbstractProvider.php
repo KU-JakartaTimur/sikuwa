@@ -14,6 +14,7 @@ use Sikuwa\Whatsapp\Http\HttpExecutor;
 use Sikuwa\Whatsapp\Http\HttpResponse;
 use Sikuwa\Whatsapp\Session;
 use Sikuwa\Whatsapp\Support\File;
+use Sikuwa\Whatsapp\Support\PhoneNumber;
 use Sikuwa\Whatsapp\Support\Presence;
 use Sikuwa\Whatsapp\Support\Text;
 
@@ -779,5 +780,136 @@ abstract class AbstractProvider implements Whatsapp
         $value = $body['error'] ?? $body['reason'] ?? null;
 
         return \is_string($value) && $value !== '' ? $value : null;
+    }
+
+    /**
+     * Pastikan kunci konfigurasi wajib sudah diisi.
+     *
+     * Dipakai provider self-hosted yang tidak bisa jalan tanpa id sesi atau
+     * instance. Pesan errornya sengaja menyebut nama kunci `.env`-nya, karena
+     * itulah satu-satunya hal yang bisa diperbaiki pemanggil.
+     *
+     * @param string $value Nilai yang diperiksa
+     * @param string $key   Nama kunci `.env`, mis. `WHATSAPP_SESSION`
+     * @return string Nilai yang sama, supaya bisa langsung dipakai:
+     *                `$id = $this->requireConfigured($id, 'WHATSAPP_SESSION');`
+     *
+     * @throws ConfigurationException
+     */
+    protected function requireConfigured(string $value, string $key): string
+    {
+        if ($value === '') {
+            throw new ConfigurationException("{$key} belum diisi di .env");
+        }
+
+        return $value;
+    }
+
+    /**
+     * Ubah tujuan menjadi bentuk yang diminta gateway, dan tolak bila kosong.
+     *
+     * Nomor yang sudah berupa JID (`...@g.us`) diteruskan apa adanya: menormalkannya
+     * akan merusak identitas grup. Sisanya dinormalkan menjadi nomor
+     * internasional tanpa tanda plus.
+     *
+     * Gateway yang memakai JID berkode lain mengurus tujuannya sendiri —
+     * OpenWA dan Wwebjs menuntut sufiks `@c.us`, sedangkan Fonnte tidak
+     * mengenal JID sama sekali.
+     *
+     * @param string $destination Nomor mentah dari pemanggil
+     *
+     * @throws ConfigurationException
+     */
+    protected function target(string $destination): string
+    {
+        $target = str_contains($destination, '@')
+            ? $destination
+            : PhoneNumber::normalize($destination);
+
+        if ($target === '') {
+            throw new ConfigurationException("Nomor tujuan '{$destination}' tidak valid");
+        }
+
+        return $target;
+    }
+
+    /**
+     * Jalur kirim gateway tanpa endpoint batch.
+     *
+     * Satu pesan dikirim langsung; lebih dari satu dikirim berurutan lewat
+     * {@see self::sendSequentially()} — yang juga memunculkan indikator ketik
+     * dan menghabiskan jeda tiap pesan. Dipakai ApiMe, Evolution API, wuzapi,
+     * dan Wwebjs; OpenWA dan Fonnte punya endpoint batch sendiri.
+     *
+     * @param array<string,mixed>|array<int,array<string,mixed>>|string $message
+     * @param callable(array):array   $build Menyusun item {@see self::plan()}
+     *                                       menjadi pesan siap kirim — biasanya
+     *                                       lewat {@see self::buildItems()}
+     * @param callable(object):string $send  Mengirim satu pesan
+     * @param callable(object):string $label Penanda pesan untuk pesan error
+     *
+     * @throws WhatsappException
+     */
+    protected function sendIndividually(array|string $message, callable $build, callable $send, callable $label): string
+    {
+        $items = $this->plan($message);
+
+        if ($items === []) {
+            return 'Tidak ada pesan untuk dikirim';
+        }
+
+        $prepared = $this->compose(fn (): array => $build($items));
+
+        if (\count($prepared) === 1) {
+            $this->announceTyping($prepared[0]);
+
+            return $send($prepared[0]['message']);
+        }
+
+        return $this->sendSequentially($prepared, $send, $label);
+    }
+
+    /**
+     * Susun tiap item hasil {@see self::plan()} menjadi pesan siap kirim.
+     *
+     * Yang berbeda antar gateway hanyalah bentuk pesannya, bukan cara
+     * menyusunnya. Nomor tujuan yang tidak bisa dibaca ditolak di sini, sebelum
+     * ada request apa pun: pesan error gateway untuk kasus ini biasanya tidak
+     * menjelaskan apa-apa.
+     *
+     * @param array<int,array{destination:string,message:string,delay:?int,typing:?int}> $items
+     * @param callable(array):object  $factory (item) => pesan gateway
+     * @param callable(object):string $target  (pesan) => tujuan yang sudah
+     *                                         dinormalkan, untuk validasi
+     *                                         sekaligus penanda pesan di log
+     * @param bool $delayOnServer true bila jeda dititipkan ke payload sehingga
+     *                            klien tidak perlu menunggu — lihat
+     *                            {@see \Sikuwa\Whatsapp\Providers\EvolutionAPI\EvolutionAPI}
+     * @return array<int,array{message:object,delay:?int,destination:string,typing:?int}>
+     *
+     * @throws ConfigurationException
+     */
+    protected function buildItems(array $items, callable $factory, callable $target, bool $delayOnServer = false): array
+    {
+        $prepared = [];
+
+        foreach ($items as $i => $item) {
+            $message = $factory($item);
+
+            if ($target($message) === '') {
+                throw new ConfigurationException("Pesan ke-{$i} tidak punya nomor tujuan yang valid");
+            }
+
+            $prepared[] = [
+                'message' => $message,
+                // Jeda yang dititipkan ke payload tidak boleh ditunggu lagi di
+                // klien — kalau ditunggu, pemanggil menunggu dua kali.
+                'delay' => $delayOnServer ? 0 : $item['delay'],
+                'destination' => $item['destination'],
+                'typing' => $item['typing'],
+            ];
+        }
+
+        return $prepared;
     }
 }

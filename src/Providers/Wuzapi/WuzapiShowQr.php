@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Sikuwa\Whatsapp\Providers\Wuzapi;
 
 use Sikuwa\Whatsapp\Session;
+use Sikuwa\Whatsapp\Support\Envelope;
 use Sikuwa\Whatsapp\Support\Qr;
 use Sikuwa\Whatsapp\Support\Text;
 
@@ -27,7 +28,7 @@ final class WuzapiShowQr
      */
     public static function fromResponse(array $body): Session
     {
-        $data = \is_array($body['data'] ?? null) ? $body['data'] : [];
+        $data = Envelope::data($body);
         $qr = Text::first($data['QRCode'] ?? null, $data['qrcode'] ?? null, $body['QRCode'] ?? null);
 
         return new Session(
