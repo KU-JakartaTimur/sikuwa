@@ -774,6 +774,7 @@ Lihat [`.env.example`](.env.example). Ringkasnya:
 | `WHATSAPP_THROTTLE_MAX` | Batas jumlah pesan per jendela (warmup). Kosong = pagar laju mati |
 | `WHATSAPP_THROTTLE_WINDOW` | Panjang satu jendela pagar laju, detik |
 | `WHATSAPP_RETRIES` | Percobaan ulang otomatis untuk 429/503 yang menyebutkan `Retry-After` (default 0) |
+| `WHATSAPP_CHECK_NUMBERS` | Periksa nomor tujuan lebih dulu dan lewati yang dipastikan tidak terdaftar. Kosong = mati |
 
 ### URL per gateway
 
@@ -957,6 +958,57 @@ Dua catatan pemakaian:
   mengirim pesan. Menyapu daftar besar sekaligus berisiko bagi akun yang dipakai,
   jadi perlakukan seperti pengiriman: sedikit dulu, dan dengan jeda.
 
+### Menyaring otomatis sebelum kirim (`check_numbers`)
+
+`checkNumbers()` di atas adalah cara **manual**: Anda memanggilnya, lalu memilih
+sendiri siapa yang dikirimi. Kalau yang diinginkan adalah jaring pengaman yang
+selalu aktif, nyalakan `WHATSAPP_CHECK_NUMBERS`:
+
+```dotenv
+WHATSAPP_CHECK_NUMBERS=1
+```
+
+Mulai saat itu setiap `sendMessage()` memeriksa tujuannya lebih dulu, dan
+membuang yang **dipastikan** tidak terdaftar. Jumlahnya dilaporkan di hasil
+pengiriman, jadi penyaringan ini tidak berjalan senyap:
+
+```text
+Sukses, messageId: 3EB0ABC (1 tujuan dilewati karena tidak terdaftar: 089876543210)
+```
+
+Bila semuanya tersaring, tidak ada request pengiriman sama sekali dan hasilnya
+`Tidak ada pesan terkirim: N tujuan dilewati karena tidak terdaftar di WhatsApp`.
+Daftar contohnya dipotong lima nomor supaya satu batch besar tidak membanjiri
+hasil.
+
+Bisa juga disetel per panggilan lewat opsi `check_numbers` — itu menang atas
+kunci `.env`:
+
+```php
+$client = new Client(['check_numbers' => true]);   // paksa nyala
+$client = new Client(['check_numbers' => false]);  // paksa mati
+```
+
+Empat perilaku yang disengaja:
+
+- **Hanya yang dipastikan tidak ada yang dibuang.** Nomor yang tidak disebut
+  jawaban gateway berarti "belum diperiksa", bukan "tidak terdaftar", jadi ia
+  tetap dikirim. Membuangnya akan menghilangkan pesan yang sebenarnya baik-baik
+  saja.
+- **Pemeriksaan yang gagal tetap mengirim.** Timeout, atau kredensial yang tidak
+  cukup untuk endpoint pemeriksaan, tidak menahan pesan — kegagalannya hanya
+  dicatat ke logger (lihat "Logger (opsional)"). Satu timeout tidak boleh
+  menghentikan seluruh batch.
+- **Tujuan berbentuk JID tidak diperiksa.** Grup (`…@g.us`) memang bukan nomor,
+  dan menormalkannya justru merusak bentuknya.
+- **Berlaku untuk pesan teks saja.** Media (`sendImage()`/`sendFile()`) tidak
+  ikut disaring.
+
+Harganya adalah request tambahan sebelum pesan berangkat. Empat gateway
+memeriksa seluruh daftar dalam satu request, tetapi OpenWA, ApiMe, dan Wwebjs
+memeriksa **satu nomor per request** — daftar sepuluh nomor berarti sepuluh
+request pemeriksaan lebih dulu. Karena itu bawaannya **mati**.
+
 ## Menghindari diblokir WhatsApp
 
 WhatsApp memblokir nomor karena **pola pengirimannya**, bukan karena SDK yang
@@ -974,7 +1026,8 @@ Yang **bisa** diatur lewat SDK:
   indikator yang lamanya sepadan dengan panjang teks, bukan seketika.
 - **`delay` eksplisit** pada tiap pesan, bila pemanggil ingin mengatur sendiri.
 - **`checkNumbers()`** — menyaring nomor yang benar-benar terdaftar di WhatsApp
-  sebelum mengirim, supaya tidak ada pesan yang menembak nomor mati.
+  sebelum mengirim, supaya tidak ada pesan yang menembak nomor mati. Bisa dipakai
+  manual, atau dijadikan jaring pengaman otomatis lewat `WHATSAPP_CHECK_NUMBERS`.
 
 Yang **tidak** bisa, dan sebaiknya tidak diharapkan dari SDK:
 
@@ -1309,6 +1362,7 @@ yang sudah teruji.
 - [x] Periksa ukuran media sebelum kirim (`File::size()`, `exceedsLimit()`, batas WhatsApp 16 MB)
 - [x] Multi Session — mendaftar semua sesi/instance per gateway (`listSessions()`)
 - [x] Periksa nomor terdaftar sebelum kirim (`checkNumbers()`, `NumberCheck`)
+- [x] Penyaring tujuan otomatis di jalur kirim teks (`WHATSAPP_CHECK_NUMBERS`)
 - [x] Logger PSR-3 opsional untuk kejadian yang tidak menggagalkan pengiriman
 
 ## Kredit
