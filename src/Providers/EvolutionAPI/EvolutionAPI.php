@@ -8,10 +8,13 @@ use Sikuwa\Whatsapp\Config;
 use Sikuwa\Whatsapp\Exceptions\ApiException;
 use Sikuwa\Whatsapp\Exceptions\ConfigurationException;
 use Sikuwa\Whatsapp\Http\HttpExecutor;
+use Sikuwa\Whatsapp\NumberCheck;
 use Sikuwa\Whatsapp\Providers\AbstractProvider;
 use Sikuwa\Whatsapp\Session;
 use Sikuwa\Whatsapp\Support\File;
+use Sikuwa\Whatsapp\Support\PhoneNumber;
 use Sikuwa\Whatsapp\Support\Presence;
+use Sikuwa\Whatsapp\Support\Text;
 
 /**
  * Gateway Evolution API (https://github.com/evolution-foundation/evolution-api),
@@ -143,6 +146,57 @@ final class EvolutionAPI extends AbstractProvider
             $this->getJson("{$this->baseUrl}/instance/connect/" . rawurlencode($instanceName)),
             $instanceName
         );
+    }
+
+    /**
+     * Periksa seluruh daftar dalam satu panggilan:
+     * `POST /chat/whatsappNumbers/{instance}`.
+     *
+     * Balasannya array `OnWhatsAppDto` — `{jid, exists, number, name?}` — satu
+     * entri per nomor yang diminta. `jid` disimpan untuk pemanggil yang
+     * membutuhkannya; entri yang tidak mengisi `number` dicocokkan lewat
+     * JID-nya, karena keduanya membawa nomor yang sama.
+     *
+     * @param array<int,string> $numbers Nomor yang sudah dinormalkan.
+     *
+     * @throws ApiException
+     * @throws ConfigurationException
+     */
+    protected function probeNumbers(array $numbers): NumberCheck
+    {
+        $instanceName = $this->requireConfigured($this->instanceName, 'WHATSAPP_INSTANCE');
+
+        $body = $this->postJson(
+            "{$this->baseUrl}/chat/whatsappNumbers/" . rawurlencode($instanceName),
+            ['numbers' => $numbers]
+        );
+
+        $results = [];
+        $ids = [];
+
+        foreach ($body as $entry) {
+            if (! \is_array($entry)) {
+                continue;
+            }
+
+            $number = PhoneNumber::normalize(
+                Text::first($entry['number'] ?? null, $entry['jid'] ?? null)
+            );
+
+            if ($number === '') {
+                continue;
+            }
+
+            $results[$number] = ($entry['exists'] ?? false) === true;
+
+            $jid = Text::of($entry['jid'] ?? null);
+
+            if ($jid !== '') {
+                $ids[$number] = $jid;
+            }
+        }
+
+        return new NumberCheck(self::NAME, $results, $ids, ['whatsappNumbers' => $body]);
     }
 
     /**

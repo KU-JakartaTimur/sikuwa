@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Sikuwa\Whatsapp\Providers;
 
+use Psr\Log\LoggerInterface;
 use Sikuwa\Whatsapp\Config;
 use Sikuwa\Whatsapp\Contracts\Whatsapp;
 use Sikuwa\Whatsapp\Exceptions\ApiException;
@@ -12,6 +13,7 @@ use Sikuwa\Whatsapp\Exceptions\TimeoutException;
 use Sikuwa\Whatsapp\Exceptions\WhatsappException;
 use Sikuwa\Whatsapp\Http\HttpExecutor;
 use Sikuwa\Whatsapp\Http\HttpResponse;
+use Sikuwa\Whatsapp\NumberCheck;
 use Sikuwa\Whatsapp\Session;
 use Sikuwa\Whatsapp\Support\File;
 use Sikuwa\Whatsapp\Support\PhoneNumber;
@@ -41,8 +43,11 @@ abstract class AbstractProvider implements Whatsapp
      * @param array{
      *     token?:string, url?:string, session?:string, instance?:string,
      *     timeout?:int|float, tokens?:array<string,string>, provider?:string,
-     *     headers?:array<string,string>
-     * }|Config|null $options
+     *     headers?:array<string,string>, logger?:LoggerInterface
+     * }|Config|null $options Kunci lain yang juga diterima — `pacing`,
+     *                         `typing`, `throttle`, `retries`, `urls`,
+     *                         `sessions`, `instances` — didaftar lengkap di
+     *                         {@see Config::from()}.
      */
     public function __construct(array|Config|null $options = null, ?HttpExecutor $http = null)
     {
@@ -128,6 +133,22 @@ abstract class AbstractProvider implements Whatsapp
      * @param Presence $presence    Keadaan yang diminta, sudah dinormalkan
      */
     abstract protected function sendPresence(string $destination, Presence $presence): string;
+
+    /**
+     * Tanyakan ke gateway nomor mana yang terdaftar di WhatsApp.
+     *
+     * Sengaja abstrak: endpoint, bentuk body, dan amplop balasannya berbeda di
+     * tiap gateway — Fonnte mengirim daftar yang dipisah koma lalu membalas
+     * dua array (`registered`/`not_registered`), OpenWA dan Wwebjs memeriksa
+     * satu nomor per panggilan, Evolution API dan Waxum membalas daftar objek,
+     * wuzapi menaruh jawabannya di `data.Users`. Yang seragam adalah cara
+     * pemanggil bertanya, dan itu dirapikan di
+     * {@see self::checkNumbers()} bersama {@see NumberCheck}.
+     *
+     * @param array<int,string> $numbers Nomor yang sudah dinormalkan ke bentuk
+     *                                   internasional tanpa tanda plus.
+     */
+    abstract protected function probeNumbers(array $numbers): NumberCheck;
 
     /**
      * Apakah gateway ini sudah menunggu dan membersihkan indikatornya sendiri.
@@ -221,6 +242,74 @@ abstract class AbstractProvider implements Whatsapp
     }
 
     /**
+     * Periksa nomor mana yang terdaftar di WhatsApp.
+     *
+     * Semua yang bisa diseragamkan dikerjakan di sini — menerima satu nomor
+     * atau daftar, membuang yang kosong, menghapus duplikat, dan menormalkan
+     * tiap nomor ke bentuk internasional tanpa tanda plus. Provider hanya
+     * menerima daftar nomor yang sudah bersih, sehingga tidak ada dari tujuh
+     * gateway yang perlu mengulang aturan yang sama.
+     *
+     * Deduplikasi bukan sekadar kerapian: memeriksa nomor yang sama dua kali
+     * adalah traffic tambahan ke WhatsApp untuk jawaban yang sudah diketahui,
+     * dan pada Fonnte ia ikut memakan jatah 500 nomor per panggilan.
+     *
+     * ```php
+     * $hasil = $client->checkNumbers('081234567890');
+     * $hasil->isRegistered('081234567890');   // true/false
+     * ```
+     *
+     * @param array<int,string>|string $numbers
+     *
+     * @throws ConfigurationException Bila tidak ada satu pun nomor yang bisa dibaca.
+     * @throws WhatsappException
+     */
+    public function checkNumbers(array|string $numbers): NumberCheck
+    {
+        $wanted = self::normalizeNumbers($numbers);
+
+        if ($wanted === []) {
+            throw new ConfigurationException(
+                'Gagal memeriksa nomor: sertakan minimal satu nomor, '
+                . "mis. checkNumbers('081234567890') atau checkNumbers(['081234567890', '089876543210'])"
+            );
+        }
+
+        return $this->probeNumbers($wanted);
+    }
+
+    /**
+     * Rapikan masukan `checkNumbers()` menjadi daftar nomor yang bersih.
+     *
+     * Nilai dikembalikan sebagai **nilai** array, bukan kunci, supaya tiap
+     * nomor tetap berupa string. Menyimpannya sebagai kunci akan membuat PHP
+     * mengubahnya menjadi integer — kunci array yang berbentuk angka selalu
+     * diperlakukan begitu — dan provider lalu mengirim angka, bukan nomor.
+     *
+     * @param array<int,string>|string $numbers
+     * @return array<int,string>
+     */
+    private static function normalizeNumbers(array|string $numbers): array
+    {
+        $list = \is_string($numbers) ? [$numbers] : $numbers;
+        $clean = [];
+
+        foreach ($list as $number) {
+            if (! \is_scalar($number)) {
+                continue;
+            }
+
+            $normalized = PhoneNumber::normalize((string) $number);
+
+            if ($normalized !== '' && ! \in_array($normalized, $clean, true)) {
+                $clean[] = $normalized;
+            }
+        }
+
+        return $clean;
+    }
+
+    /**
      * Normalkan pesan bermedia lalu teruskan ke gateway.
      *
      * `sendImage()` dan `sendFile()` sengaja hanya berbeda pada kunci yang
@@ -310,9 +399,10 @@ abstract class AbstractProvider implements Whatsapp
      * Kegagalan menampilkan indikator sengaja **tidak** menggagalkan
      * pengiriman, dan tidak menambah jeda apa pun. Mengirim pesan jauh lebih
      * penting daripada hiasannya, dan gateway yang tidak mengenal presence
-     * tidak boleh membuat pemanggil kehilangan pesannya. Karena SDK ini tidak
-     * punya logger, kegagalan itu senyap — kalau perlu diketahui, panggil
-     * {@see self::sendTyping()} sendiri dan tangani exception-nya.
+     * tidak boleh membuat pemanggil kehilangan pesannya. Kegagalan itu dicatat
+     * ke logger kalau pemanggil memasangnya — lihat {@see self::log()} —
+     * tetapi tetap tidak pernah dilempar. Kalau perlu ditangani sendiri,
+     * panggil {@see self::sendTyping()} dan tangani exception-nya.
      *
      * @param array<string,mixed>|null $item Satu item dari {@see self::plan()},
      *                                       atau satu item `$prepared` provider
@@ -335,7 +425,15 @@ abstract class AbstractProvider implements Whatsapp
 
         try {
             $this->sendPresence(trim($destination), Presence::from(Presence::COMPOSING, $seconds));
-        } catch (WhatsappException) {
+        } catch (WhatsappException $e) {
+            // Dicatat, bukan dilempar: indikator yang gagal tidak boleh
+            // membuat pemanggil kehilangan pesannya.
+            $this->log('warning', 'Indikator "sedang mengetik" gagal ditampilkan; pesannya tetap dikirim', [
+                'provider' => $this->getProvider(),
+                'destination' => trim($destination),
+                'error' => $e->getMessage(),
+            ]);
+
             return;
         }
 
@@ -343,6 +441,38 @@ abstract class AbstractProvider implements Whatsapp
         // menghabiskan durasi itu di dalam request-nya.
         if (! $this->presenceBlocks()) {
             $this->pause($seconds);
+        }
+    }
+
+    /**
+     * Catat satu kejadian ke logger pemanggil, bila ada.
+     *
+     * Satu-satunya jalan SDK ini menulis ke log. Selama pemanggil tidak
+     * memasang logger, seluruh method ini tidak melakukan apa-apa — sehingga
+     * perilakunya sama persis seperti sebelum logger ada.
+     *
+     * Logger sengaja **tidak pernah** bisa menggagalkan pengiriman: kelas
+     * logger yang melempar — mis. karena disk penuh, atau konteksnya tidak
+     * sesuai harapannya — akan mengubah kegagalan hiasan menjadi kegagalan
+     * pesan. Karena itu exception-nya ditelan di sini, dan hanya di sini.
+     *
+     * @param string              $level   Level PSR-3: `debug`, `info`,
+     *                                     `warning`, atau `error`.
+     * @param array<string,mixed> $context Data tambahan, mis. `provider` dan
+     *                                     `destination`.
+     */
+    protected function log(string $level, string $message, array $context = []): void
+    {
+        $logger = $this->config->logger();
+
+        if ($logger === null) {
+            return;
+        }
+
+        try {
+            $logger->log($level, $message, $context);
+        } catch (\Throwable) {
+            // Sengaja ditelan — lihat penjelasan di atas.
         }
     }
 
@@ -560,11 +690,11 @@ abstract class AbstractProvider implements Whatsapp
      * Peringatkan bila satu batch mengirim ke nomor yang sama lebih dari sekali.
      *
      * Sengaja **tidak** dipanggil dari jalur kirim. Mengirim dua pesan ke satu
-     * orang adalah hal yang sah — mis. teks lalu berkas — dan SDK ini tidak
-     * punya logger, sehingga peringatan otomatis hanya akan muncul sebagai
-     * notice PHP yang tidak bisa ditangkap pemanggil dengan rapi. Pemanggil
-     * yang ingin memeriksanya memanggil {@see self::repeatedTargets()} sendiri
-     * dan memutuskan apa yang pantas dilakukan.
+     * orang adalah hal yang sah — mis. teks lalu berkas — sehingga peringatan
+     * otomatis akan lebih sering salah daripada berguna, dan pemanggil yang
+     * memasang logger pun tidak punya cara mematikannya. Pemanggil yang ingin
+     * memeriksanya memanggil {@see self::repeatedTargets()} sendiri dan
+     * memutuskan apa yang pantas dilakukan.
      *
      * @param array<int,array<string,mixed>> $messages
      */
@@ -800,9 +930,11 @@ abstract class AbstractProvider implements Whatsapp
      *   seperti itu lebih baik diserahkan ke pemanggil, yang tahu jadwalnya.
      *
      * Dijeda dengan {@see self::pause()} supaya test tidak benar-benar menunggu.
-     * Bila percobaan terakhir tetap gagal, exception terakhir dilempar apa
-     * adanya — pesannya sudah memuat `Retry-After`, jadi pemanggil tetap bisa
-     * mengatur ulang jadwalnya sendiri.
+     * Setiap percobaan ulang dicatat ke logger — kalau pemanggil memasangnya —
+     * karena tanpa catatan itu penolakan yang berhasil diatasi tidak terlihat
+     * sama sekali dari luar. Bila percobaan terakhir tetap gagal, exception
+     * terakhir dilempar apa adanya — pesannya sudah memuat `Retry-After`, jadi
+     * pemanggil tetap bisa mengatur ulang jadwalnya sendiri.
      *
      * @param callable():mixed $attempt
      *
@@ -823,6 +955,14 @@ abstract class AbstractProvider implements Whatsapp
                 }
 
                 $sisa--;
+
+                $this->log('warning', 'Gateway menolak sementara; mencoba ulang setelah jeda', [
+                    'provider' => $this->getProvider(),
+                    'status' => $e->getStatus(),
+                    'retry_after' => $tunggu,
+                    'remaining' => $sisa,
+                ]);
+
                 $this->pause($tunggu);
             }
         }

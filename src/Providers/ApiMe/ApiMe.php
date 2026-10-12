@@ -8,10 +8,12 @@ use Sikuwa\Whatsapp\Config;
 use Sikuwa\Whatsapp\Exceptions\ApiException;
 use Sikuwa\Whatsapp\Exceptions\ConfigurationException;
 use Sikuwa\Whatsapp\Http\HttpExecutor;
+use Sikuwa\Whatsapp\NumberCheck;
 use Sikuwa\Whatsapp\Providers\AbstractProvider;
 use Sikuwa\Whatsapp\Session;
 use Sikuwa\Whatsapp\Support\File;
 use Sikuwa\Whatsapp\Support\Presence;
+use Sikuwa\Whatsapp\Support\Text;
 
 /**
  * Gateway ApiMe (https://github.com/open-apime/apime), WhatsApp self-hosted
@@ -148,6 +150,77 @@ final class ApiMe extends AbstractProvider
             $this->getJson("{$this->baseUrl}/api/instances/" . rawurlencode($instanceId) . '/qr'),
             $instanceId
         );
+    }
+
+    /**
+     * Periksa nomor satu per satu: `POST /api/instances/{id}/whatsapp/check`.
+     *
+     * Body-nya `{phone}` — satu nomor per panggilan — dan balasannya dibungkus
+     * `{"data":{"results":[…]}}` berisi satu entri. Nomor yang tidak terdaftar
+     * dijawab `IsIn: false`; soket yang belum siap justru dibalas HTTP 503,
+     * dan itu bukan "tidak terdaftar" — karena itu ia tetap dilempar sebagai
+     * kegagalan, bukan dilaporkan sebagai `false`.
+     *
+     * @param array<int,string> $numbers Nomor yang sudah dinormalkan.
+     *
+     * @throws ApiException
+     * @throws ConfigurationException
+     */
+    protected function probeNumbers(array $numbers): NumberCheck
+    {
+        $instanceId = $this->requireConfigured($this->instanceId, 'WHATSAPP_INSTANCE');
+
+        $results = [];
+        $ids = [];
+        $raw = [];
+
+        foreach ($numbers as $number) {
+            $body = $this->postJson(
+                "{$this->baseUrl}/api/instances/" . rawurlencode($instanceId) . '/whatsapp/check',
+                ['phone' => $number]
+            );
+
+            $raw[] = $body;
+
+            $data = \is_array($body['data'] ?? null) ? $body['data'] : [];
+            $entry = self::firstEntry($data);
+
+            $results[$number] = ($entry['IsIn'] ?? false) === true;
+
+            $jid = Text::of($entry['JID'] ?? null);
+
+            if ($jid !== '') {
+                $ids[$number] = $jid;
+            }
+        }
+
+        return new NumberCheck(self::NAME, $results, $ids, $raw);
+    }
+
+    /**
+     * Ambil satu entri hasil dari `data` milik ApiMe.
+     *
+     * Handler-nya membalas `{"data":{"results":[{…}]}}`, tetapi OpenAPI ApiMe
+     * tidak mendeklarasikan skema balasan sama sekali — jadi entri pertama
+     * dicari di `results` dulu, dan `data` itu sendiri dipakai bila ternyata
+     * jawabannya tidak dibungkus.
+     *
+     * @param array<string,mixed> $data
+     * @return array<string,mixed>
+     */
+    private static function firstEntry(array $data): array
+    {
+        $results = $data['results'] ?? null;
+
+        if (\is_array($results)) {
+            foreach ($results as $entry) {
+                if (\is_array($entry)) {
+                    return $entry;
+                }
+            }
+        }
+
+        return $data;
     }
 
     /**

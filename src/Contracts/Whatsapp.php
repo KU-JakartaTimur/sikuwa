@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Sikuwa\Whatsapp\Contracts;
 
+use Sikuwa\Whatsapp\NumberCheck;
 use Sikuwa\Whatsapp\Session;
 
 /**
@@ -190,6 +191,47 @@ interface Whatsapp
      * @throws \Sikuwa\Whatsapp\Exceptions\WhatsappException
      */
     public function sendTyping(array $message): string;
+
+    /**
+     * Periksa nomor mana yang benar-benar terdaftar di WhatsApp.
+     *
+     * Ini satu-satunya cara SDK tahu apakah sebuah nomor bisa dihubungi:
+     * WhatsApp tidak memberi tahu sebelum pesannya benar-benar dikirim, dan
+     * menembak nomor yang tidak pernah ada adalah pemicu pemblokiran yang
+     * paling sering. Pakai hasilnya untuk menyaring daftar tujuan lebih dulu:
+     *
+     * ```php
+     * $hasil = $client->checkNumbers(['081234567890', '089876543210']);
+     *
+     * foreach ($hasil->registered() as $nomor) {
+     *     $client->send(['destination' => $nomor, 'message' => 'Halo']);
+     * }
+     * ```
+     *
+     * Nomornya boleh ditulis dalam bentuk apa pun yang lazim — `0812…`,
+     * `+62 812…`, atau `62812…` — dan hasilnya selalu dikunci dengan bentuk
+     * internasional tanpa tanda plus. Karena itu tanyakan kembali lewat
+     * {@see NumberCheck::isRegistered()} alih-alih membaca hasilnya langsung:
+     * method itu menormalkan nomornya untuk Anda.
+     *
+     * Beberapa gateway bisa memeriksa seluruh daftar dalam satu panggilan
+     * (Evolution API, wuzapi, Waxum, Fonnte), sisanya satu nomor per
+     * panggilan — perbedaannya tidak terlihat pemanggil, tetapi menentukan
+     * berapa lama panggilan ini berlangsung.
+     *
+     * Nomor yang tidak disebut gateway tidak muncul di hasil: itu berarti
+     * belum terperiksa, bukan "tidak terdaftar".
+     * {@see NumberCheck::isRegistered()} menjawab `false` untuk keduanya.
+     *
+     * @param array<int,string>|string $numbers Satu nomor, atau daftar nomor.
+     *
+     * @return NumberCheck Hasil pemeriksaan, bentuknya sama di semua gateway.
+     *
+     * @throws \Sikuwa\Whatsapp\Exceptions\WhatsappException Bila pemeriksaan
+     *         gagal — mis. sesi belum tersambung, atau API key-nya bukan kunci
+     *         berperan operator (OpenWA).
+     */
+    public function checkNumbers(array|string $numbers): NumberCheck;
 
     /**
      * Buat sesi/instance baru di gateway.

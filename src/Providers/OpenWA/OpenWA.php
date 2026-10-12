@@ -8,11 +8,13 @@ use Sikuwa\Whatsapp\Config;
 use Sikuwa\Whatsapp\Exceptions\ApiException;
 use Sikuwa\Whatsapp\Exceptions\ConfigurationException;
 use Sikuwa\Whatsapp\Http\HttpExecutor;
+use Sikuwa\Whatsapp\NumberCheck;
 use Sikuwa\Whatsapp\Providers\AbstractProvider;
 use Sikuwa\Whatsapp\Session;
 use Sikuwa\Whatsapp\Support\File;
 use Sikuwa\Whatsapp\Support\PhoneNumber;
 use Sikuwa\Whatsapp\Support\Presence;
+use Sikuwa\Whatsapp\Support\Text;
 
 /**
  * Gateway OpenWA (https://github.com/rmyndharis/OpenWA), WhatsApp self-hosted
@@ -143,6 +145,53 @@ final class OpenWA extends AbstractProvider
             $this->getJson("{$this->baseUrl}/api/sessions/" . rawurlencode($sessionId) . '/qr'),
             $sessionId
         );
+    }
+
+    /**
+     * Periksa nomor satu per satu: `GET …/contacts/check/{number}`.
+     *
+     * OpenWA tidak punya endpoint batch, jadi daftarnya diulang — satu request
+     * untuk tiap nomor. Endpoint ini juga menuntut API key berperan
+     * **operator**; kunci baca biasa ditolak HTTP 403. Setiap panggilan adalah
+     * pertanyaan keluar tentang pihak ketiga, jadi jangan dipakai menyapu
+     * daftar besar tanpa jeda.
+     *
+     * @param array<int,string> $numbers Nomor yang sudah dinormalkan.
+     *
+     * @throws ApiException
+     * @throws ConfigurationException
+     */
+    protected function probeNumbers(array $numbers): NumberCheck
+    {
+        $sessionId = $this->requireConfigured($this->sessionId, 'WHATSAPP_SESSION');
+
+        $results = [];
+        $ids = [];
+        $raw = [];
+
+        foreach ($numbers as $number) {
+            $body = $this->getJson(
+                "{$this->baseUrl}/api/sessions/" . rawurlencode($sessionId)
+                . '/contacts/check/' . rawurlencode($number)
+            );
+
+            $raw[] = $body;
+
+            // Sebagian versi membungkus balasannya sebagai `{success, data}`,
+            // sebagian mengembalikan objeknya langsung — sama seperti endpoint
+            // sesi yang lain.
+            $data = \is_array($body['data'] ?? null) ? $body['data'] : $body;
+
+            $results[$number] = ($data['exists'] ?? false) === true;
+
+            $whatsappId = Text::of($data['whatsappId'] ?? null);
+
+            if ($whatsappId !== '') {
+                $ids[$number] = $whatsappId;
+            }
+        }
+
+        return new NumberCheck(self::NAME, $results, $ids, $raw);
     }
 
     /**

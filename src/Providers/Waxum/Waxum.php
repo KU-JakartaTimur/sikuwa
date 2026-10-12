@@ -8,10 +8,13 @@ use Sikuwa\Whatsapp\Config;
 use Sikuwa\Whatsapp\Exceptions\ApiException;
 use Sikuwa\Whatsapp\Exceptions\ConfigurationException;
 use Sikuwa\Whatsapp\Http\HttpExecutor;
+use Sikuwa\Whatsapp\NumberCheck;
 use Sikuwa\Whatsapp\Providers\AbstractProvider;
 use Sikuwa\Whatsapp\Session;
 use Sikuwa\Whatsapp\Support\File;
+use Sikuwa\Whatsapp\Support\PhoneNumber;
 use Sikuwa\Whatsapp\Support\Presence;
+use Sikuwa\Whatsapp\Support\Text;
 
 /**
  * Gateway waxum (https://github.com/imtaqin/waxum), WhatsApp self-hosted
@@ -200,6 +203,56 @@ final class Waxum extends AbstractProvider
         }
 
         return WaxumShowQr::fromResponse($body, $sessionId);
+    }
+
+    /**
+     * Periksa seluruh daftar dalam satu panggilan:
+     * `POST /api/v1/sessions/{id}/contacts/check`.
+     *
+     * Body-nya `{"phones":[…]}` dan balasannya
+     * `{"results":[{"phone","exists","jid"}]}` — satu entri per nomor.
+     *
+     * @param array<int,string> $numbers Nomor yang sudah dinormalkan.
+     *
+     * @throws ApiException
+     * @throws ConfigurationException
+     */
+    protected function probeNumbers(array $numbers): NumberCheck
+    {
+        $sessionId = $this->requireConfigured($this->sessionId, 'WHATSAPP_SESSION');
+
+        $body = $this->postJson($this->sessionUrl($sessionId, 'contacts/check'), ['phones' => $numbers]);
+
+        $entries = $body['results'] ?? null;
+
+        $results = [];
+        $ids = [];
+
+        if (\is_array($entries)) {
+            foreach ($entries as $entry) {
+                if (! \is_array($entry)) {
+                    continue;
+                }
+
+                $number = PhoneNumber::normalize(
+                    Text::first($entry['phone'] ?? null, $entry['jid'] ?? null)
+                );
+
+                if ($number === '') {
+                    continue;
+                }
+
+                $results[$number] = ($entry['exists'] ?? false) === true;
+
+                $jid = Text::of($entry['jid'] ?? null);
+
+                if ($jid !== '') {
+                    $ids[$number] = $jid;
+                }
+            }
+        }
+
+        return new NumberCheck(self::NAME, $results, $ids, ['contacts/check' => $body]);
     }
 
     /**

@@ -8,10 +8,13 @@ use Sikuwa\Whatsapp\Config;
 use Sikuwa\Whatsapp\Exceptions\ApiException;
 use Sikuwa\Whatsapp\Exceptions\ConfigurationException;
 use Sikuwa\Whatsapp\Http\HttpExecutor;
+use Sikuwa\Whatsapp\NumberCheck;
 use Sikuwa\Whatsapp\Providers\AbstractProvider;
 use Sikuwa\Whatsapp\Session;
 use Sikuwa\Whatsapp\Support\File;
+use Sikuwa\Whatsapp\Support\PhoneNumber;
 use Sikuwa\Whatsapp\Support\Presence;
+use Sikuwa\Whatsapp\Support\Text;
 
 /**
  * Gateway wuzapi (https://github.com/asternic/wuzapi), WhatsApp self-hosted
@@ -152,6 +155,56 @@ final class Wuzapi extends AbstractProvider
         return WuzapiShowQr::fromResponse(
             $this->requireSuccess($this->requireJson($body, $response->status), $response->status)
         );
+    }
+
+    /**
+     * Periksa nomor lewat `POST /user/check`.
+     *
+     * Body-nya `{"Phone":[…]}` dan balasannya `data.Users` — satu entri per
+     * nomor, dengan `IsInWhatsapp` sebagai jawabannya. wuzapi membalas HTTP
+     * 200 bahkan saat menolak, jadi amplop `success`-nya yang diperiksa lebih
+     * dulu, sama seperti jalur lain di provider ini.
+     *
+     * @param array<int,string> $numbers Nomor yang sudah dinormalkan.
+     *
+     * @throws ApiException
+     */
+    protected function probeNumbers(array $numbers): NumberCheck
+    {
+        $body = $this->requireSuccess(
+            $this->postJson("{$this->baseUrl}/user/check", ['Phone' => $numbers])
+        );
+
+        $users = $body['data']['Users'] ?? null;
+
+        $results = [];
+        $ids = [];
+
+        if (\is_array($users)) {
+            foreach ($users as $entry) {
+                if (! \is_array($entry)) {
+                    continue;
+                }
+
+                $number = PhoneNumber::normalize(
+                    Text::first($entry['Query'] ?? null, $entry['JID'] ?? null)
+                );
+
+                if ($number === '') {
+                    continue;
+                }
+
+                $results[$number] = ($entry['IsInWhatsapp'] ?? false) === true;
+
+                $jid = Text::of($entry['JID'] ?? null);
+
+                if ($jid !== '') {
+                    $ids[$number] = $jid;
+                }
+            }
+        }
+
+        return new NumberCheck(self::NAME, $results, $ids, ['user/check' => $body]);
     }
 
     /**

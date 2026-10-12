@@ -8,6 +8,7 @@ use Sikuwa\Whatsapp\Config;
 use Sikuwa\Whatsapp\Exceptions\ApiException;
 use Sikuwa\Whatsapp\Exceptions\ConfigurationException;
 use Sikuwa\Whatsapp\Http\HttpExecutor;
+use Sikuwa\Whatsapp\NumberCheck;
 use Sikuwa\Whatsapp\Providers\AbstractProvider;
 use Sikuwa\Whatsapp\Session;
 use Sikuwa\Whatsapp\Support\File;
@@ -212,6 +213,40 @@ final class Wwebjs extends AbstractProvider
         }
 
         return WwebjsShowQr::fromImage((string) $response->body, $sessionId);
+    }
+
+    /**
+     * Periksa nomor satu per satu: `POST /client/isRegisteredUser/{sessionId}`.
+     *
+     * Body-nya `{number}` dan balasannya `{"success":true,"result":true}`.
+     * Sama seperti pengiriman, endpoint ini menuntut session yang sudah
+     * tersambung: middleware `sessionValidation` menolaknya dengan HTTP 404
+     * selama session belum `CONNECTED`.
+     *
+     * @param array<int,string> $numbers Nomor yang sudah dinormalkan.
+     *
+     * @throws ApiException
+     * @throws ConfigurationException
+     */
+    protected function probeNumbers(array $numbers): NumberCheck
+    {
+        $sessionId = $this->requireConfigured($this->sessionId, 'WHATSAPP_SESSION');
+
+        $results = [];
+        $raw = [];
+
+        foreach ($numbers as $number) {
+            $body = $this->postJson(
+                $this->endpoint('client/isRegisteredUser/' . rawurlencode($sessionId)),
+                ['number' => $number]
+            );
+
+            $raw[] = $body;
+
+            $results[$number] = ($body['result'] ?? false) === true;
+        }
+
+        return new NumberCheck(self::NAME, $results, [], $raw);
     }
 
     /**

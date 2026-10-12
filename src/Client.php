@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Sikuwa\Whatsapp;
 
 use GuzzleHttp\ClientInterface;
+use Psr\Log\LoggerInterface;
 use Sikuwa\Whatsapp\Contracts\Whatsapp;
 use Sikuwa\Whatsapp\Exceptions\ConfigurationException;
 use Sikuwa\Whatsapp\Exceptions\UnknownProviderException;
@@ -75,7 +76,8 @@ final class Client
      *     sessions?:array<string,array<int,string>>,
      *     instances?:array<string,array<int,string>>,
      *     pacing?:array<string,mixed>, typing?:array<string,mixed>,
-     *     throttle?:array<string,mixed>, retries?:string|int
+     *     throttle?:array<string,mixed>, retries?:string|int,
+     *     logger?:LoggerInterface
      * }|Config $options
      */
     public function __construct(array|Config $options = [], ?ClientInterface $httpClient = null)
@@ -356,6 +358,36 @@ final class Client
     public function sendTyping(array $message): string
     {
         return $this->provider()->sendTyping($message);
+    }
+
+    /**
+     * Periksa nomor mana yang terdaftar di WhatsApp.
+     *
+     * Berguna untuk menyaring daftar tujuan sebelum mengirim: WhatsApp tidak
+     * memberi tahu apakah sebuah nomor bisa dihubungi sebelum pesannya benar-
+     * benar dikirim, dan menembak nomor yang tidak pernah ada adalah pemicu
+     * pemblokiran yang paling sering.
+     *
+     * ```php
+     * $hasil = $client->checkNumbers(['081234567890', '089876543210']);
+     *
+     * foreach ($hasil->registered() as $nomor) {
+     *     $client->send(['destination' => $nomor, 'message' => 'Halo']);
+     * }
+     * ```
+     *
+     * Seperti {@see self::provider()}, gateway dipilih ulang pada tiap
+     * pemanggilan — untuk `provider = auto` itu berarti undiannya diulang.
+     * Simpan instance gateway kalau pemeriksaan dan pengiriman harus mengenai
+     * gateway yang sama.
+     *
+     * @param array<int,string>|string $numbers Satu nomor, atau daftar nomor.
+     *
+     * @throws WhatsappException
+     */
+    public function checkNumbers(array|string $numbers): NumberCheck
+    {
+        return $this->provider()->checkNumbers($numbers);
     }
 
     /**

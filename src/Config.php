@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Sikuwa\Whatsapp;
 
+use Psr\Log\LoggerInterface;
 use Sikuwa\Whatsapp\Support\Pacing;
 use Sikuwa\Whatsapp\Support\Throttle;
 use Sikuwa\Whatsapp\Support\Typing;
@@ -70,6 +71,10 @@ final class Config
      * @param Typing|null $typing Pengatur indikator "sedang mengetik" yang
      *                            dimunculkan sendiri sebelum mengirim — lihat
      *                            {@see self::typing()}.
+     * @param LoggerInterface|null $logger Logger PSR-3 opsional untuk kejadian
+     *                                     yang tidak boleh menggagalkan
+     *                                     pengiriman — lihat
+     *                                     {@see self::logger()}.
      */
     public function __construct(
         private ?string $token = null,
@@ -87,7 +92,8 @@ final class Config
      private ?Pacing $pacing = null,
         private ?Typing $typing = null,
         private ?Throttle $throttle = null,
-        private ?int $retries = null
+        private ?int $retries = null,
+        private ?LoggerInterface $logger = null
     ) {
     }
 
@@ -111,7 +117,8 @@ final class Config
      *         enabled?:mixed, speed?:string|int, min?:string|int, max?:string|int
      *     }|Typing,
      *     throttle?:array{max?:string|int, window?:string|int}|Throttle,
-     *     retries?:string|int
+     *     retries?:string|int,
+     *     logger?:LoggerInterface
      * }|Config|null $options
      */
     public static function from(array|Config|null $options): self
@@ -141,6 +148,7 @@ final class Config
             typing: self::typingOption($options['typing'] ?? null),
             throttle: self::throttleOption($options['throttle'] ?? null),
             retries: isset($options['retries']) ? (int) $options['retries'] : null,
+            logger: $options['logger'] ?? null,
         );
     }
 
@@ -672,6 +680,31 @@ final class Config
         $configured = $this->retries ?? self::retriesFromEnv();
 
         return $configured === null ? 0 : max(0, $configured);
+    }
+
+    /**
+     * Logger PSR-3 opsional, atau null bila pemanggil tidak memasangnya.
+     *
+     * SDK ini sengaja **tidak** mencatat apa pun sendiri — ia hanya memakai
+     * logger kalau pemanggil memberikannya. Yang dicatat pun cuma kejadian
+     * yang tadinya senyap sama sekali: indikator "sedang mengetik" yang gagal
+     * ditampilkan, dan percobaan ulang setelah gateway menolak sementara.
+     * Keduanya tidak menggagalkan pengiriman, jadi tanpa logger pun pemanggil
+     * kehilangan informasi — bukan pesan.
+     *
+     * Tidak ada kunci environment untuk ini: sebuah objek tidak bisa dibaca
+     * dari `.env`, dan menebak dari nama kelas adalah cara yang lebih buruk
+     * daripada membiarkannya kosong. Pasang lewat opsi `logger`:
+     *
+     * ```php
+     * $client = new Client(['provider' => 'OpenWA', 'logger' => $monolog]);
+     * ```
+     *
+     * Bawaannya null, sehingga perilakunya sama seperti sebelum fitur ini ada.
+     */
+    public function logger(): ?LoggerInterface
+    {
+        return $this->logger;
     }
 
     /**

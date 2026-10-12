@@ -10,11 +10,13 @@ use Sikuwa\Whatsapp\Exceptions\ConfigurationException;
 use Sikuwa\Whatsapp\Exceptions\NotFoundException;
 use Sikuwa\Whatsapp\Http\HttpExecutor;
 use Sikuwa\Whatsapp\Http\HttpResponse;
+use Sikuwa\Whatsapp\NumberCheck;
 use Sikuwa\Whatsapp\Providers\AbstractProvider;
 use Sikuwa\Whatsapp\Session;
 use Sikuwa\Whatsapp\Support\File;
 use Sikuwa\Whatsapp\Support\PhoneNumber;
 use Sikuwa\Whatsapp\Support\Presence;
+use Sikuwa\Whatsapp\Support\Text;
 
 /**
  * Gateway Fonnte (https://fonnte.com), layanan WhatsApp berbayar berbasis cloud.
@@ -41,6 +43,14 @@ final class Fonnte extends AbstractProvider
     public const NAME = 'Fonnte';
 
     public const DEFAULT_URL = 'https://api.fonnte.com/send';
+
+    /**
+     * Batas nomor per panggilan `/validate`, menurut dokumentasi Fonnte.
+     *
+     * Fonnte menolak panggilan yang melebihi batas ini seluruhnya, bukan
+     * memotongnya sendiri, jadi daftarnya dipotong di sisi SDK.
+     */
+    private const MAX_VALIDATE = 500;
 
     private string $urlApi;
 
@@ -215,6 +225,82 @@ final class Fonnte extends AbstractProvider
         }
 
         return FonnteShowQr::fromResponse($this->requireStatus($body));
+    }
+
+    /**
+     * Periksa nomor lewat `POST /validate`.
+     *
+     * Fonnte menuntut nomornya dalam satu kolom `target` yang dipisah koma,
+     * lalu membalas dua daftar — `registered` dan `not_registered`. Jadi di
+     * sini pemeriksaannya sekaligus banyak, berbeda dari OpenWA dan Wwebjs
+     * yang satu nomor per panggilan.
+     *
+     * Daftar yang melebihi 500 nomor dipotong menjadi beberapa panggilan:
+     * Fonnte menolak panggilan yang kelebihan seluruhnya, sehingga tanpa
+     * pemotongan ini satu nomor ke-501 membuat semua nomor lain ikut gagal.
+     *
+     * @param array<int,string> $numbers Nomor yang sudah dinormalkan.
+     *
+     * @throws ApiException
+     */
+    protected function probeNumbers(array $numbers): NumberCheck
+    {
+        $results = [];
+        $raw = [];
+
+        foreach (array_chunk($numbers, self::MAX_VALIDATE) as $chunk) {
+            $body = $this->accepted(
+                $this->http->post(
+                    "{$this->deviceBase}/validate",
+                    // Nomornya sudah berbentuk internasional, jadi `countryCode`
+                    // tidak lagi mengubah apa pun — ia hanya ikut karena
+                    // dokumentasinya menandainya sebagai parameter resmi.
+                    ['target' => implode(',', $chunk), 'countryCode' => PhoneNumber::COUNTRY_CODE],
+                    $this->authHeaders()
+                ),
+                'pemeriksaan nomor'
+            );
+
+            $raw[] = $body;
+
+            foreach (self::numberList($body['registered'] ?? null) as $number) {
+                $results[$number] = true;
+            }
+
+            foreach (self::numberList($body['not_registered'] ?? null) as $number) {
+                $results[$number] = false;
+            }
+        }
+
+        return new NumberCheck(self::NAME, $results, [], $raw);
+    }
+
+    /**
+     * Nomor-nomor dari salah satu daftar balasan Fonnte.
+     *
+     * Tiap entri dinormalkan lebih dulu: Fonnte membalas nomornya seperti yang
+     * dikirim, dan bentuk yang sedikit berbeda akan membuat nomor itu tampak
+     * "tidak terperiksa" padahal gateway sudah menjawabnya.
+     *
+     * @return array<int,string>
+     */
+    private static function numberList(mixed $value): array
+    {
+        if (! \is_array($value)) {
+            return [];
+        }
+
+        $list = [];
+
+        foreach ($value as $item) {
+            $number = PhoneNumber::normalize(Text::of($item));
+
+            if ($number !== '') {
+                $list[] = $number;
+            }
+        }
+
+        return $list;
     }
 
     /**

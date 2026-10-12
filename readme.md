@@ -29,7 +29,7 @@ membutuhkan PHP 8.1+.
 composer require mdestafadilah/sikuwa
 ```
 
-Butuh PHP 8.1+ dan `ext-mbstring`; Guzzle 7 ikut terpasang sebagai dependensi.
+Butuh PHP 8.1+ dan `ext-mbstring`; Guzzle 7 dan `psr/log` ikut terpasang sebagai dependensi.
 
 Untuk mengikuti `main` alih-alih rilis stabil:
 
@@ -474,9 +474,10 @@ Tiga hal yang mudah menjebak, dan sudah ditangani SDK:
 - **Indikator yang gagal tidak menggagalkan pesannya.** Mengirim pesan jauh
   lebih penting daripada hiasannya, jadi kegagalan `composing` (endpoint tidak
   ada, sesi tidak terhubung, timeout) dilewati begitu saja — dan tidak menambah
-  jeda yang tidak dipakai. Karena SDK ini tidak punya logger, kegagalan itu
-  senyap; kalau perlu diketahui, panggil `sendTyping()` sendiri dan tangani
-  exception-nya.
+  jeda yang tidak dipakai. Kegagalan itu dicatat ke logger kalau Anda
+  memasangnya — lihat [Logger (opsional)](#logger-opsional) — dan tetap senyap
+  tanpa logger. Kalau perlu ditangani sendiri, panggil `sendTyping()` dan
+  tangani exception-nya.
 
 ### Dua gaya pemanggilan
 
@@ -904,6 +905,58 @@ sudah dikonfigurasi tetapi belum dibuat di server, atau sebaliknya.
   Seluruh error-nya berbentuk `{"success":false,"error":{"code":N,"message":"…"}}`,
   dengan HTTP 503 untuk sesi yang belum tersambung.
 
+## Memeriksa nomor (`checkNumbers()`)
+
+WhatsApp tidak memberi tahu apakah sebuah nomor bisa dihubungi sebelum pesannya
+benar-benar dikirim, jadi satu-satunya cara mengetahuinya adalah bertanya lebih
+dulu. `checkNumbers()` melakukan itu, dan hasilnya sama di tujuh gateway:
+
+```php
+$hasil = $client->checkNumbers(['081234567890', '089876543210']);
+
+foreach ($hasil->registered() as $nomor) {
+    $client->send(['destination' => $nomor, 'message' => 'Halo']);
+}
+```
+
+Nomornya boleh ditulis dalam bentuk apa pun yang lazim — `0812…`, `+62 812…`,
+atau `62812…`:
+
+```php
+$hasil = $client->checkNumbers('081234567890');
+
+$hasil->isRegistered('081234567890');       // true
+$hasil->isRegistered('+62 812-3456-7890');  // true — bentuknya tidak penting
+$hasil->whatsappId('081234567890');         // "6281234567890@s.whatsapp.net", bila gateway menyebutkannya
+```
+
+`isRegistered()` mengembalikan `false` untuk nomor yang **tidak terperiksa**
+maupun yang dipastikan tidak terdaftar. Keduanya diperlakukan sama karena arah
+yang aman untuk pemakaiannya adalah tidak mengirim; `registered()` dan
+`unregistered()` hanya berisi nomor yang benar-benar dijawab gateway, sehingga
+daftar itu tidak pernah melebih-lebihkan apa yang diketahui.
+
+Berapa nomor yang bisa diperiksa sekali panggil berbeda antar gateway, tetapi
+tidak terlihat dari sisi pemanggil:
+
+| Gateway | Endpoint | Sekali panggil |
+| --- | --- | --- |
+| Fonnte | `POST /validate` | sampai 500 nomor (kelebihannya dipotong SDK) |
+| OpenWA | `GET /api/sessions/{id}/contacts/check/{number}` | satu nomor |
+| ApiMe | `POST /api/instances/{id}/whatsapp/check` | satu nomor |
+| Evolution API | `POST /chat/whatsappNumbers/{instance}` | seluruh daftar |
+| Wuzapi | `POST /user/check` | seluruh daftar |
+| Wwebjs | `POST /client/isRegisteredUser/{sessionId}` | satu nomor |
+| Waxum | `POST /api/v1/sessions/{id}/contacts/check` | seluruh daftar |
+
+Dua catatan pemakaian:
+
+- **OpenWA menuntut API key berperan operator** di endpoint ini; kunci baca biasa
+  ditolak HTTP 403.
+- Memeriksa nomor adalah **traffic keluar tentang pihak ketiga**, sama seperti
+  mengirim pesan. Menyapu daftar besar sekaligus berisiko bagi akun yang dipakai,
+  jadi perlakukan seperti pengiriman: sedikit dulu, dan dengan jeda.
+
 ## Menghindari diblokir WhatsApp
 
 WhatsApp memblokir nomor karena **pola pengirimannya**, bukan karena SDK yang
@@ -920,6 +973,8 @@ Yang **bisa** diatur lewat SDK:
 - **Indikator "sedang mengetik"** — `WHATSAPP_TYPING`. Pesan datang setelah
   indikator yang lamanya sepadan dengan panjang teks, bukan seketika.
 - **`delay` eksplisit** pada tiap pesan, bila pemanggil ingin mengatur sendiri.
+- **`checkNumbers()`** — menyaring nomor yang benar-benar terdaftar di WhatsApp
+  sebelum mengirim, supaya tidak ada pesan yang menembak nomor mati.
 
 Yang **tidak** bisa, dan sebaiknya tidak diharapkan dari SDK:
 
@@ -930,9 +985,10 @@ Yang **tidak** bisa, dan sebaiknya tidak diharapkan dari SDK:
   selama beberapa hari lalu menaikkannya perlahan. SDK hanya menegakkan batas
   yang Anda berikan; angka yang benar untuk akun hari ke-1 berbeda dari hari
   ke-30, dan itu keputusan pemanggil.
-- **Pemilihan tujuan.** Mengirim ke nomor yang tidak pernah membalas
-  (cold outreach) adalah pemicu blokir yang paling sering, dan SDK tidak bisa
-  membedakan pelanggan dari orang asing.
+- **Pemilihan tujuan.** `checkNumbers()` bisa memberi tahu nomor mana yang
+  terdaftar, tetapi **terdaftar bukan berarti mau menerima**: nomor yang sah tapi
+  tidak pernah mengenal Anda tetap pemicu blokir yang paling sering. Keputusan
+  siapa yang pantas dikirimi tetap milik pemanggil.
 
 Perhatikan bahwa percobaan ulang **sudah** ditangani SDK saat gateway
 menyebutkan `Retry-After` — lihat "Percobaan ulang (HTTP 429 & 503)" di bawah.
@@ -1001,6 +1057,48 @@ try {
 
 Bawaannya **mati** karena mengulang berarti menahan proses pemanggil lebih lama,
 sama seperti pacing dan pagar laju.
+
+## Logger (opsional)
+
+SDK ini tidak mencatat apa pun sendiri. Ia memakai logger **kalau** Anda
+memberikannya, dan hanya untuk kejadian yang tadinya senyap sama sekali:
+
+- indikator "sedang mengetik" yang gagal ditampilkan — pesannya tetap dikirim;
+- percobaan ulang setelah gateway menolak dengan 429/503.
+
+```php
+use Monolog\Logger;
+use Sikuwa\Whatsapp\Client;
+
+$client = new Client([
+    'provider' => 'OpenWA',
+    'logger'   => new Logger('whatsapp'),   // apa pun yang memenuhi PSR-3
+]);
+```
+
+Catatannya berlevel `warning`, dengan `provider`, `destination`, dan `error` di
+dalam konteksnya — cukup untuk tahu apa yang terjadi tanpa ikut menuliskan isi
+pesannya:
+
+```text
+Indikator "sedang mengetik" gagal ditampilkan; pesannya tetap dikirim
+  provider=OpenWA destination=081234567890 error="OpenWA menolak pesan (HTTP 500): …"
+
+Gateway menolak sementara; mencoba ulang setelah jeda
+  provider=ApiMe status=429 retry_after=30 remaining=0
+```
+
+Dua hal yang sengaja begitu:
+
+- **Bawaannya null**, sehingga perilakunya sama persis seperti sebelum fitur ini
+  ada — tanpa logger, jalur kirimnya tidak berubah sama sekali.
+- **Logger yang melempar tidak menggagalkan pengiriman.** Kegagalan hiasan tidak
+  boleh berubah menjadi kegagalan pesan hanya karena disk penuh, atau karena
+  format konteksnya tidak disukai kelas logger-nya.
+
+Tidak ada kunci `.env` untuk ini: sebuah objek tidak bisa dibaca dari `.env`, dan
+menebak kelas logger dari namanya adalah cara yang lebih buruk daripada
+membiarkannya kosong.
 
 ## Mengirim banyak pesan lewat worker
 
@@ -1210,6 +1308,10 @@ yang sudah teruji.
 - [x] Percobaan ulang otomatis 429/503 dengan menghormati `Retry-After` (`WHATSAPP_RETRIES`)
 - [x] Periksa ukuran media sebelum kirim (`File::size()`, `exceedsLimit()`, batas WhatsApp 16 MB)
 - [x] Multi Session — mendaftar semua sesi/instance per gateway (`listSessions()`)
+- [x] Periksa nomor terdaftar di WhatsApp (`checkNumbers()`)
+- [x] Logger PSR-3 opsional — mencatat kegagalan yang tidak boleh menggagalkan pengiriman
+- [x] Periksa nomor terdaftar sebelum kirim (`checkNumbers()`, `NumberCheck`)
+- [x] Logger PSR-3 opsional untuk kejadian yang tidak menggagalkan pengiriman
 
 ## Kredit
 
