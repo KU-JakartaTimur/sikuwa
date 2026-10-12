@@ -477,6 +477,178 @@ abstract class AbstractProvider implements Whatsapp
     }
 
     /**
+     * Buang tujuan yang dipastikan tidak terdaftar, bila setelannya menyala.
+     *
+     * Dipanggil tepat setelah {@see self::plan()} di setiap jalur kirim teks,
+     * sebelum request pengiriman apa pun. Selama `check_numbers` mati, method
+     * ini mengembalikan `$items` apa adanya dan tidak menyentuh jaringan — itulah
+     * yang membuat jalur kirimnya tidak berubah sama sekali tanpa fiturnya.
+     *
+     * Hanya tujuan yang **dipastikan** tidak terdaftar yang dibuang. Nomor yang
+     * tidak disebut jawabannya berarti "belum diperiksa", bukan "tidak ada", dan
+     * membuangnya akan menghilangkan pesan yang sebenarnya baik-baik saja —
+     * lihat {@see NumberCheck::unregistered()}.
+     *
+     * Tujuan yang sudah berbentuk JID (grup, atau JID yang dikirim pemanggil
+     * sendiri) tidak ikut diperiksa: tidak ada nomor yang bisa ditanyakan untuk
+     * itu, dan menormalkannya justru merusak bentuknya.
+     *
+     * @param array<int,array<string,mixed>> $items Hasil {@see self::plan()}.
+     *
+     * @return array{items:array<int,array<string,mixed>>,skipped:array<int,string>}
+     *         `skipped` memuat tujuan seperti yang ditulis pemanggil, supaya
+     *         laporannya bisa ia kenali kembali.
+     */
+    protected function guardNumbers(array $items): array
+    {
+        if (! $this->config->checkNumbers() || $items === []) {
+            return ['items' => $items, 'skipped' => []];
+        }
+
+        $numbers = [];
+
+        foreach ($items as $item) {
+            $number = self::checkableNumber((string) ($item['destination'] ?? ''));
+
+            if ($number !== '') {
+                $numbers[$number] = true;
+            }
+        }
+
+        // Tidak ada satu pun tujuan yang bisa diperiksa — mis. semuanya grup.
+        if ($numbers === []) {
+            return ['items' => $items, 'skipped' => []];
+        }
+
+        try {
+            $hasil = $this->checkNumbers(array_keys($numbers));
+        } catch (WhatsappException $e) {
+            // Sengaja tidak dilempar: pemeriksaan yang gagal tidak boleh menahan
+            // pesan, sama seperti indikator ketik yang gagal. Satu timeout tidak
+            // boleh menghentikan seluruh batch.
+            //
+            // Tangkapannya sengaja selebar ini, bukan hanya timeout. Kasus yang
+            // paling sering justru kredensial: endpoint cek OpenWA menuntut kunci
+            // berperan operator, dan kunci baca biasa ditolak HTTP 403. Kalau
+            // penolakan itu dilempar, menyalakan setelan ini justru mematikan
+            // seluruh pengiriman pada akun yang cuma punya kunci baca — padahal
+            // kirimnya sendiri baik-baik saja. Yang menentukan sah tidaknya
+            // konfigurasi adalah jalur kirim, bukan penyaring ini.
+            $this->log('warning', 'Pemeriksaan nomor sebelum kirim gagal; pesan tetap dikirim', [
+                'provider' => $this->getProvider(),
+                'error' => $e->getMessage(),
+            ]);
+
+            return ['items' => $items, 'skipped' => []];
+        }
+
+        $tidakTerdaftar = $hasil->unregistered();
+
+        if ($tidakTerdaftar === []) {
+            return ['items' => $items, 'skipped' => []];
+        }
+
+        // Kunci array yang berbentuk angka diubah PHP menjadi integer. Di sini
+        // itu tidak berbahaya: pengisi dan pencari sama-sama lewat koersi yang
+        // sama, jadi `isset()` tetap menemukan pasangannya. Yang tidak boleh
+        // adalah membandingkannya sebagai string — itu yang dijaga
+        // {@see NumberCheck::keysWhere()}.
+        $dibuang = [];
+
+        foreach ($tidakTerdaftar as $number) {
+            $dibuang[$number] = true;
+        }
+
+        $tersisa = [];
+        $dilewati = [];
+
+        foreach ($items as $item) {
+            $destination = (string) ($item['destination'] ?? '');
+            $number = self::checkableNumber($destination);
+
+            if ($number !== '' && isset($dibuang[$number])) {
+                $dilewati[] = $destination;
+                continue;
+            }
+
+            $tersisa[] = $item;
+        }
+
+        if ($dilewati !== []) {
+            $this->log('warning', 'Tujuan yang dipastikan tidak terdaftar dilewati', [
+                'provider' => $this->getProvider(),
+                'diperiksa' => \count($numbers),
+                'dilewati' => \count($dilewati),
+            ]);
+        }
+
+        return ['items' => $tersisa, 'skipped' => $dilewati];
+    }
+
+    /**
+     * Nomor yang bisa ditanyakan ke gateway, atau string kosong bila tidak ada.
+     *
+     * Tujuan berbentuk JID tidak punya padanan nomor: grup memang bukan nomor,
+     * dan JID yang dikirim pemanggil sendiri bisa saja bersufiks lain daripada
+     * yang diharapkan gateway.
+     */
+    private static function checkableNumber(string $destination): string
+    {
+        if ($destination === '' || str_contains($destination, '@')) {
+            return '';
+        }
+
+        return PhoneNumber::normalize($destination);
+    }
+
+    /**
+     * Catatan tentang tujuan yang dilewati, untuk ditempel di hasil pengiriman.
+     *
+     * Daftarnya dipotong supaya satu batch besar tidak membanjiri hasil dengan
+     * ratusan nomor: yang perlu diketahui pemanggil adalah berapa banyak, plus
+     * beberapa contoh untuk diperiksa.
+     *
+     * @param array<int,string> $skipped
+     */
+    protected function skippedNote(array $skipped): string
+    {
+        if ($skipped === []) {
+            return '';
+        }
+
+        $contoh = array_slice($skipped, 0, 5);
+        $sisa = \count($skipped) - \count($contoh);
+
+        return sprintf(
+            ' (%d tujuan dilewati karena tidak terdaftar: %s%s)',
+            \count($skipped),
+            implode(', ', $contoh),
+            $sisa > 0 ? " dan {$sisa} lainnya" : ''
+        );
+    }
+
+    /**
+     * Hasil ketika tidak ada satu pun tujuan yang layak dikirimi.
+     *
+     * Dibedakan dari "tidak ada pesan untuk dikirim": pemanggil yang mengirim
+     * daftar berisi lalu menerima balasan itu perlu tahu bahwa pesannya memang
+     * ada, tetapi semuanya tersaring — bukan bahwa daftarnya kosong.
+     *
+     * @param array<int,string> $skipped
+     */
+    protected function noRecipients(array $skipped): string
+    {
+        if ($skipped === []) {
+            return 'Tidak ada pesan untuk dikirim';
+        }
+
+        return sprintf(
+            'Tidak ada pesan terkirim: %d tujuan dilewati karena tidak terdaftar di WhatsApp',
+            \count($skipped)
+        );
+    }
+
+    /**
      * Pasang penidur sendiri. Kirim null untuk kembali ke `sleep()` biasa.
      *
      * Ada supaya jeda antar pesan bisa diuji tanpa benar-benar menunggu —
@@ -1186,10 +1358,13 @@ abstract class AbstractProvider implements Whatsapp
      */
     protected function sendIndividually(array|string $message, callable $build, callable $send, callable $label): string
     {
-        $items = $this->plan($message);
+        // Penyaringan nomor dilakukan sebelum apa pun disusun, supaya tujuan
+        // yang tidak terdaftar tidak ikut memakan satu request pengiriman.
+        $guard = $this->guardNumbers($this->plan($message));
+        $items = $guard['items'];
 
         if ($items === []) {
-            return 'Tidak ada pesan untuk dikirim';
+            return $this->noRecipients($guard['skipped']);
         }
 
         $prepared = $this->compose(fn (): array => $build($items));
@@ -1200,10 +1375,15 @@ abstract class AbstractProvider implements Whatsapp
             // Lewat withRetry() juga: satu pesan adalah kasus paling sering
             // dipakai, jadi justru di situ percobaan ulang paling terasa.
             // sendSequentially() di bawah punya jalurnya sendiri.
-            return $this->withRetry(fn (): string => $send($prepared[0]['message']));
+            return $this->withRetry(fn (): string => $send($prepared[0]['message']))
+                . $this->skippedNote($guard['skipped']);
         }
 
-        return $this->sendSequentially($prepared, $send, $label);
+        // Catatannya ditempel di luar: sendSequentially() menghitung dari item
+        // yang tersisa, jadi tanpa catatan ini pemanggil melihat "2/2" untuk
+        // daftar yang ia kirim berisi tiga nomor.
+        return $this->sendSequentially($prepared, $send, $label)
+            . $this->skippedNote($guard['skipped']);
     }
 
     /**

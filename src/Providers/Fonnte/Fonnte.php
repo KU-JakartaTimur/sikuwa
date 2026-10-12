@@ -372,10 +372,11 @@ final class Fonnte extends AbstractProvider
      */
     public function sendMessage(array|string $message): string
     {
-        $items = $this->plan($message);
+        $guard = $this->guardNumbers($this->plan($message));
+        $items = $guard['items'];
 
         if ($items === []) {
-            return 'Tidak ada pesan untuk dikirim';
+            return $this->noRecipients($guard['skipped']);
         }
 
         $payload = $this->compose(fn (): string => (new FonnteBulkMessage($items))->toJson());
@@ -394,7 +395,7 @@ final class Fonnte extends AbstractProvider
                 ['data' => $payload],
                 $this->authHeaders()
             )
-        );
+        ) . $this->skippedNote($guard['skipped']);
     }
 
     /**

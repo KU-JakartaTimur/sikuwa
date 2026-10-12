@@ -355,6 +355,42 @@ final class ConfigTest extends TestCase
     }
 
     // ---------------------------------------------------------------------
+    // Saklar pemeriksaan nomor: WHATSAPP_CHECK_NUMBERS
+    //
+    // Berbeda dari notifikasi, saklar ini bawaannya MATI. Menyalakannya
+    // menambah request pemeriksaan ke setiap kirim teks, jadi pemanggil yang
+    // tidak memintanya tidak boleh ikut menanggungnya.
+    // ---------------------------------------------------------------------
+
+    #[DataProvider('checkNumberFlags')]
+    public function testCheckNumbersFlagIsRead(?string $value, bool $expected): void
+    {
+        self::fakeEnv($value === null ? [] : ['WHATSAPP_CHECK_NUMBERS' => $value]);
+
+        self::assertSame($expected, Config::from([])->checkNumbers());
+    }
+
+    /** @return array<string,array{0:?string,1:bool}> */
+    public static function checkNumberFlags(): array
+    {
+        return [
+            'tidak diisi berarti mati' => [null, false],
+            'true' => ['true', true],
+            'false' => ['false', false],
+            'satu' => ['1', true],
+            'nol' => ['0', false],
+        ];
+    }
+
+    public function testCheckNumbersOptionBeatsEnvironment(): void
+    {
+        self::fakeEnv(['WHATSAPP_CHECK_NUMBERS' => 'true']);
+
+        self::assertFalse(Config::from(['check_numbers' => false])->checkNumbers());
+        self::assertTrue(Config::from(['check_numbers' => true])->checkNumbers());
+    }
+
+    // ---------------------------------------------------------------------
     // Kunci jamak: WHATSAPP_SESSIONS_<Provider> / WHATSAPP_INSTANCES_<Provider>
     //
     // Kunci tunggal (WHATSAPP_SESSION_<Provider>) hanya menampung satu sesi

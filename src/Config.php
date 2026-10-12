@@ -30,7 +30,7 @@ use Sikuwa\Whatsapp\Support\Typing;
  * `WHATSAPP_PACING_INTERVAL`, `WHATSAPP_PACING_LONG_CHARS`,
  * `WHATSAPP_PACING_LONG_FACTOR`, `WHATSAPP_TYPING`, `WHATSAPP_TYPING_SPEED`,
  * `WHATSAPP_TYPING_MIN`, `WHATSAPP_TYPING_MAX`, `WHATSAPP_THROTTLE_MAX`,
- * `WHATSAPP_THROTTLE_WINDOW`.
+ * `WHATSAPP_THROTTLE_WINDOW`, `WHATSAPP_RETRIES`, `WHATSAPP_CHECK_NUMBERS`.
  */
 final class Config
 {
@@ -75,6 +75,10 @@ final class Config
      *                                     yang tidak boleh menggagalkan
      *                                     pengiriman — lihat
      *                                     {@see self::logger()}.
+     * @param bool|null $checkNumbers Periksa dulu nomor tujuan sebelum mengirim
+     *                                pesan teks, dan lewati yang dipastikan
+     *                                tidak terdaftar — lihat
+     *                                {@see self::checkNumbers()}.
      */
     public function __construct(
         private ?string $token = null,
@@ -93,7 +97,8 @@ final class Config
         private ?Typing $typing = null,
         private ?Throttle $throttle = null,
         private ?int $retries = null,
-        private ?LoggerInterface $logger = null
+        private ?LoggerInterface $logger = null,
+        private ?bool $checkNumbers = null
     ) {
     }
 
@@ -118,7 +123,8 @@ final class Config
      *     }|Typing,
      *     throttle?:array{max?:string|int, window?:string|int}|Throttle,
      *     retries?:string|int,
-     *     logger?:LoggerInterface
+     *     logger?:LoggerInterface,
+     *     check_numbers?:mixed
      * }|Config|null $options
      */
     public static function from(array|Config|null $options): self
@@ -149,6 +155,9 @@ final class Config
             throttle: self::throttleOption($options['throttle'] ?? null),
             retries: isset($options['retries']) ? (int) $options['retries'] : null,
             logger: $options['logger'] ?? null,
+            checkNumbers: isset($options['check_numbers'])
+                ? filter_var($options['check_numbers'], FILTER_VALIDATE_BOOLEAN)
+                : null,
         );
     }
 
@@ -167,6 +176,7 @@ final class Config
             typing: self::typingFromEnv(),
             throttle: self::throttleFromEnv(),
             retries: self::retriesFromEnv(),
+            checkNumbers: self::checkNumbersFromEnv(),
         );
     }
 
@@ -705,6 +715,50 @@ final class Config
     public function logger(): ?LoggerInterface
     {
         return $this->logger;
+    }
+
+    /**
+     * Apakah nomor tujuan diperiksa dulu sebelum pesan teks dikirim.
+     *
+     * Menyalakannya berarti tiap `sendMessage()` didahului satu pemeriksaan ke
+     * gateway, dan tujuan yang **dipastikan** tidak terdaftar tidak ikut
+     * dikirimi pesan.
+     *
+     * Tiga hal yang disengaja:
+     *
+     * - **Bawaannya mati.** Pemeriksaan menambah request ke jalur kirim — di
+     *   OpenWA, ApiMe, dan Wwebjs satu request per nomor, berurutan — jadi ia
+     *   harus dinyalakan dengan sadar, sama seperti pacing dan pagar laju.
+     * - **Hanya yang dipastikan tidak terdaftar yang dilewati.** Nomor yang
+     *   tidak disebut jawabannya berarti "belum diperiksa", bukan "tidak ada";
+     *   melewatinya akan membuang pesan yang sebenarnya baik-baik saja.
+     * - **Pemeriksaan yang gagal tidak menahan pesan.** Bila request
+     *   pemeriksaannya sendiri gagal, pesannya tetap dikirim dan kegagalannya
+     *   dicatat ke logger — satu timeout tidak boleh menghentikan seluruh batch.
+     *
+     * Method ini mengembalikan **pengaturan**, bukan hasil pemeriksaan. Untuk
+     * memeriksa nomor, lihat {@see Client::checkNumbers()}.
+     */
+    public function checkNumbers(): bool
+    {
+        return $this->checkNumbers ?? self::checkNumbersFromEnv();
+    }
+
+    /**
+     * Saklar `WHATSAPP_CHECK_NUMBERS` dari environment.
+     *
+     * Dikumpulkan di satu tempat seperti {@see self::retriesFromEnv()}, supaya
+     * dua jalur yang memakainya — {@see self::fromEnvironment()} dan
+     * {@see self::checkNumbers()} — tidak bisa berbeda diam-diam.
+     *
+     * Apa pun yang tidak dikenali berarti **mati**: kunci yang lupa ditulis
+     * atau salah tulis tidak boleh tiba-tiba menambah request ke jalur kirim.
+     */
+    private static function checkNumbersFromEnv(): bool
+    {
+        $value = self::env('WHATSAPP_CHECK_NUMBERS');
+
+        return $value !== null && filter_var($value, FILTER_VALIDATE_BOOLEAN);
     }
 
     /**

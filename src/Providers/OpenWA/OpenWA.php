@@ -211,10 +211,11 @@ final class OpenWA extends AbstractProvider
      */
     public function sendMessage(array|string $message): string
     {
-        $items = $this->plan($message);
+        $guard = $this->guardNumbers($this->plan($message));
+        $items = $guard['items'];
 
         if ($items === []) {
-            return 'Tidak ada pesan untuk dikirim';
+            return $this->noRecipients($guard['skipped']);
         }
 
         $this->requireConfigured($this->sessionId, 'WHATSAPP_SESSION');
@@ -239,9 +240,14 @@ final class OpenWA extends AbstractProvider
         // datang, dan itu lebih buruk daripada tanpa indikator.
         $this->announceTyping($items[0] ?? null);
 
-        return $bulk->count() === 1
+        $hasil = $bulk->count() === 1
             ? $this->sendText($bulk->first())
             : $this->sendBulk($bulk);
+
+        // Catatannya ditempel di luar: batchnya sendiri menghitung dari item
+        // yang tersisa, jadi tanpa catatan ini pemanggil melihat "2/2" untuk
+        // daftar yang ia kirim berisi tiga nomor.
+        return $hasil . $this->skippedNote($guard['skipped']);
     }
 
     /**
