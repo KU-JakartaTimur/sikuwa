@@ -1308,8 +1308,6 @@ yang sudah teruji.
 - [x] Percobaan ulang otomatis 429/503 dengan menghormati `Retry-After` (`WHATSAPP_RETRIES`)
 - [x] Periksa ukuran media sebelum kirim (`File::size()`, `exceedsLimit()`, batas WhatsApp 16 MB)
 - [x] Multi Session — mendaftar semua sesi/instance per gateway (`listSessions()`)
-- [x] Periksa nomor terdaftar di WhatsApp (`checkNumbers()`)
-- [x] Logger PSR-3 opsional — mencatat kegagalan yang tidak boleh menggagalkan pengiriman
 - [x] Periksa nomor terdaftar sebelum kirim (`checkNumbers()`, `NumberCheck`)
 - [x] Logger PSR-3 opsional untuk kejadian yang tidak menggagalkan pengiriman
 
