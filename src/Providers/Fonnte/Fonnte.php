@@ -249,7 +249,9 @@ final class Fonnte extends AbstractProvider
         $raw = [];
 
         foreach (array_chunk($numbers, self::MAX_VALIDATE) as $chunk) {
-            $body = $this->accepted(
+            // Percobaan ulang per potongan, bukan membungkus seluruh method:
+            // potongan yang sudah dijawab tidak perlu ditanyakan lagi.
+            $body = $this->withRetry(fn (): array => $this->accepted(
                 $this->http->post(
                     "{$this->deviceBase}/validate",
                     // Nomornya sudah berbentuk internasional, jadi `countryCode`
@@ -259,7 +261,7 @@ final class Fonnte extends AbstractProvider
                     $this->authHeaders()
                 ),
                 'pemeriksaan nomor'
-            );
+            ));
 
             $raw[] = $body;
 

@@ -221,7 +221,11 @@ final class Waxum extends AbstractProvider
     {
         $sessionId = $this->requireConfigured($this->sessionId, 'WHATSAPP_SESSION');
 
-        $body = $this->postJson($this->sessionUrl($sessionId, 'contacts/check'), ['phones' => $numbers]);
+        // Seluruh daftar dalam satu request, jadi percobaan ulangnya membungkus
+        // request itu — tidak ada potongan yang bisa diulang sendiri-sendiri.
+        $body = $this->withRetry(
+            fn (): array => $this->postJson($this->sessionUrl($sessionId, 'contacts/check'), ['phones' => $numbers])
+        );
 
         $entries = $body['results'] ?? null;
 

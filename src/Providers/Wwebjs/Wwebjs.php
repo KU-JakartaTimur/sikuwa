@@ -236,10 +236,11 @@ final class Wwebjs extends AbstractProvider
         $raw = [];
 
         foreach ($numbers as $number) {
-            $body = $this->postJson(
+            // Satu nomor = satu request, jadi percobaan ulangnya pun per nomor.
+            $body = $this->withRetry(fn (): array => $this->postJson(
                 $this->endpoint('client/isRegisteredUser/' . rawurlencode($sessionId)),
                 ['number' => $number]
-            );
+            ));
 
             $raw[] = $body;
 

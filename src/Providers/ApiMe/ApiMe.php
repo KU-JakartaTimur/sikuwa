@@ -175,10 +175,11 @@ final class ApiMe extends AbstractProvider
         $raw = [];
 
         foreach ($numbers as $number) {
-            $body = $this->postJson(
+            // Satu nomor = satu request, jadi percobaan ulangnya pun per nomor.
+            $body = $this->withRetry(fn (): array => $this->postJson(
                 "{$this->baseUrl}/api/instances/" . rawurlencode($instanceId) . '/whatsapp/check',
                 ['phone' => $number]
-            );
+            ));
 
             $raw[] = $body;
 

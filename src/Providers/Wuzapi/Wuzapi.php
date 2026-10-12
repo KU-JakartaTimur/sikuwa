@@ -171,9 +171,11 @@ final class Wuzapi extends AbstractProvider
      */
     protected function probeNumbers(array $numbers): NumberCheck
     {
-        $body = $this->requireSuccess(
+        // Seluruh daftar dalam satu request; percobaan ulangnya membungkus
+        // request itu beserta pemeriksaan amplopnya, sama seperti jalur kirim.
+        $body = $this->withRetry(fn (): array => $this->requireSuccess(
             $this->postJson("{$this->baseUrl}/user/check", ['Phone' => $numbers])
-        );
+        ));
 
         $users = $body['data']['Users'] ?? null;
 

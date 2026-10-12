@@ -166,10 +166,12 @@ final class EvolutionAPI extends AbstractProvider
     {
         $instanceName = $this->requireConfigured($this->instanceName, 'WHATSAPP_INSTANCE');
 
-        $body = $this->postJson(
+        // Seluruh daftar dalam satu request, jadi percobaan ulangnya membungkus
+        // request itu — tidak ada potongan yang bisa diulang sendiri-sendiri.
+        $body = $this->withRetry(fn (): array => $this->postJson(
             "{$this->baseUrl}/chat/whatsappNumbers/" . rawurlencode($instanceName),
             ['numbers' => $numbers]
-        );
+        ));
 
         $results = [];
         $ids = [];

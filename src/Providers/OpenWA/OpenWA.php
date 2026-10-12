@@ -170,10 +170,14 @@ final class OpenWA extends AbstractProvider
         $raw = [];
 
         foreach ($numbers as $number) {
-            $body = $this->getJson(
+            // Satu nomor = satu request, jadi percobaan ulangnya pun per nomor.
+            // Membungkus seluruh daftar akan menanyakan ulang nomor yang sudah
+            // dijawab — dan pada daftar panjang, mengulang dari awal hampir pasti
+            // menabrak batas laju yang sama lagi sehingga tidak pernah selesai.
+            $body = $this->withRetry(fn (): array => $this->getJson(
                 "{$this->baseUrl}/api/sessions/" . rawurlencode($sessionId)
                 . '/contacts/check/' . rawurlencode($number)
-            );
+            ));
 
             $raw[] = $body;
 
