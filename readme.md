@@ -773,7 +773,7 @@ Lihat [`.env.example`](.env.example). Ringkasnya:
 | `WHATSAPP_TYPING_MAX` | Lama indikator tampil paling lama, detik (default 20) |
 | `WHATSAPP_THROTTLE_MAX` | Batas jumlah pesan per jendela (warmup). Kosong = pagar laju mati |
 | `WHATSAPP_THROTTLE_WINDOW` | Panjang satu jendela pagar laju, detik |
-| `WHATSAPP_RETRIES` | Percobaan ulang otomatis untuk 429/503 yang menyebutkan `Retry-After` (default 0) |
+| `WHATSAPP_RETRIES` | Percobaan ulang otomatis untuk 429/503 yang menyebutkan `Retry-After`, pada pengiriman pesan dan pemeriksaan nomor (default 0) |
 | `WHATSAPP_CHECK_NUMBERS` | Periksa nomor tujuan lebih dulu dan lewati yang dipastikan tidak terdaftar. Kosong = mati |
 
 ### URL per gateway
@@ -950,13 +950,17 @@ tidak terlihat dari sisi pemanggil:
 | Wwebjs | `POST /client/isRegisteredUser/{sessionId}` | satu nomor |
 | Waxum | `POST /api/v1/sessions/{id}/contacts/check` | seluruh daftar |
 
-Dua catatan pemakaian:
+Tiga catatan pemakaian:
 
 - **OpenWA menuntut API key berperan operator** di endpoint ini; kunci baca biasa
   ditolak HTTP 403.
 - Memeriksa nomor adalah **traffic keluar tentang pihak ketiga**, sama seperti
   mengirim pesan. Menyapu daftar besar sekaligus berisiko bagi akun yang dipakai,
   jadi perlakukan seperti pengiriman: sedikit dulu, dan dengan jeda.
+- Bila gateway menolak dengan **429/503** dan menyebutkan `Retry-After`,
+  pemeriksaannya diulang sendiri mengikuti `WHATSAPP_RETRIES` — sama seperti
+  pengiriman pesan. Pada gateway yang memeriksa satu nomor per request, hanya
+  nomor yang ditolak yang diulang. Lihat [Percobaan ulang](#percobaan-ulang-http-429--503).
 
 ### Menyaring otomatis sebelum kirim (`check_numbers`)
 
@@ -1059,9 +1063,13 @@ sering menyertakan header `Retry-After` — berapa detik pemanggil sebaiknya
 menunggu. SDK membacanya dan, bila `WHATSAPP_RETRIES` diisi, mengulang
 percobaannya sendiri setelah menunggu selama itu.
 
+Berlaku untuk **kedua jalur** yang berbicara ke gateway: pengiriman pesan dan
+pemeriksaan nomor (`checkNumbers()`, termasuk saat dipakai otomatis lewat
+`WHATSAPP_CHECK_NUMBERS`).
+
 | Kunci | Arti |
 | --- | --- |
-| `WHATSAPP_RETRIES` | Berapa kali percobaan ulang per pesan. Bawaannya **0** (mati) |
+| `WHATSAPP_RETRIES` | Berapa kali percobaan ulang per request. Bawaannya **0** (mati) |
 
 Dua syarat harus terpenuhi bersamaan, dan itu disengaja:
 
@@ -1087,6 +1095,14 @@ $client->send([
 //   4. POST pesan 2  -> 200   (berhasil, tidak ada yang hilang)
 //   5. POST pesan 3  -> 200
 ```
+
+Percobaan ulang dihitung **per request**, bukan per batch. Pada gateway yang
+mengirim satu pesan per request (ApiMe, Wuzapi, Wwebjs, Evolution API) itu berarti
+satu pesan yang ditolak diulang sendiri, dan pesan lain tidak ikut terulang.
+Begitu pula pada pemeriksaan nomor di gateway yang memeriksa satu nomor per
+request (OpenWA, ApiMe, Wwebjs): hanya nomor yang ditolak yang ditanyakan lagi,
+sehingga daftar panjang tidak kembali ke awal dan tidak menanyakan ulang nomor
+yang sudah dijawab.
 
 `Retry-After` diterima dalam dua bentuk — jumlah detik (`30`) maupun tanggal
 HTTP (`Wed, 21 Oct 2026 07:28:00 GMT`). Bentuk tanggal diubah menjadi selisih
@@ -1358,7 +1374,7 @@ yang sudah teruji.
 - [x] Send Media File
 - [x] Human Being Typing (`sendTyping()` eksplisit dan otomatis lewat `WHATSAPP_TYPING`)
 - [x] Pagar laju / warmup (`WHATSAPP_THROTTLE_MAX` & `WHATSAPP_THROTTLE_WINDOW`)
-- [x] Percobaan ulang otomatis 429/503 dengan menghormati `Retry-After` (`WHATSAPP_RETRIES`)
+- [x] Percobaan ulang otomatis 429/503 dengan menghormati `Retry-After` (`WHATSAPP_RETRIES`), untuk pengiriman pesan maupun pemeriksaan nomor
 - [x] Periksa ukuran media sebelum kirim (`File::size()`, `exceedsLimit()`, batas WhatsApp 16 MB)
 - [x] Multi Session — mendaftar semua sesi/instance per gateway (`listSessions()`)
 - [x] Periksa nomor terdaftar sebelum kirim (`checkNumbers()`, `NumberCheck`)
